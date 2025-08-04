@@ -23,7 +23,7 @@ interface BusMapProps {
   autoFit?: boolean
 }
 
-// Format elapsed time for display - FIXED to use actual elapsed time
+// Format elapsed time for display
 const formatElapsedTime = (minutes: number): string => {
   const hours = Math.floor(minutes / 60)
   const mins = Math.floor(minutes % 60)
@@ -82,18 +82,18 @@ export default function BusMap({
       maxZoom: 19,
     }).addTo(map)
 
-    // Add garage marker with responsive width
+    // Add garage marker with smaller size
     const garageIcon = L.divIcon({
       html: `
         <div class="relative">
-          <div class="bg-gray-600 text-white rounded-lg px-2 py-1 text-xs font-bold shadow-lg border-2 border-white whitespace-nowrap max-w-[140px] truncate">
+          <div class="bg-gray-600 text-white rounded-lg px-1 py-0.5 text-[10px] font-bold shadow-lg border-2 border-white whitespace-nowrap max-w-[80px] truncate">
             🏢 ${GARAGE_LOCATION.name}
           </div>
         </div>
       `,
       className: "garage-marker",
-      iconSize: [140, 24],
-      iconAnchor: [70, 12],
+      iconSize: [80, 12],
+      iconAnchor: [40, 6],
     })
 
     const activeBuses = buses.filter((b) => b.is_active).length
@@ -173,7 +173,7 @@ export default function BusMap({
         busColor = "yellow-600"
         statusText = "Standby di Titik Awal"
         progressDisplay = `
-          <div class="absolute -bottom-6 left-1/2 transform -translate-x-1/2 bg-yellow-500 text-white rounded-full px-2 py-1 text-xs font-bold whitespace-nowrap">
+          <div class="absolute -bottom-2 left-1/2 transform -translate-x-1/2 bg-yellow-500 text-white rounded-full px-0.5 py-0.25 text-[6px] font-bold whitespace-nowrap">
             Ready
           </div>
         `
@@ -181,7 +181,7 @@ export default function BusMap({
         busColor = "green-600"
         statusText = "Sudah Sampai di Titik Akhir"
         progressDisplay = `
-          <div class="absolute -bottom-6 left-1/2 transform -translate-x-1/2 bg-green-500 text-white rounded-full px-2 py-1 text-xs font-bold whitespace-nowrap">
+          <div class="absolute -bottom-2 left-1/2 transform -translate-x-1/2 bg-green-500 text-white rounded-full px-0.5 py-0.25 text-[6px] font-bold whitespace-nowrap">
             Arrived
           </div>
         `
@@ -189,28 +189,28 @@ export default function BusMap({
         busColor = "blue-600"
         statusText = "Sedang dalam Perjalanan"
         progressDisplay = `
-          <div class="absolute -bottom-6 left-1/2 transform -translate-x-1/2 bg-blue-500 text-white rounded-full px-2 py-1 text-xs font-bold whitespace-nowrap">
+          <div class="absolute -bottom-2 left-1/2 transform -translate-x-1/2 bg-blue-500 text-white rounded-full px-0.5 py-0.25 text-[6px] font-bold whitespace-nowrap">
             ${elapsedTime}
           </div>
         `
       }
 
-      // Bus icon based on status
+      // Bus icon based on status (fixed small size, larger nickname label)
       const busIcon = L.divIcon({
         html: `
           <div class="relative bus-marker-container" style="transform-origin: center; will-change: transform;">
-            <div class="absolute -top-8 left-1/2 transform -translate-x-1/2 bg-white text-gray-800 rounded px-2 py-1 text-xs font-bold shadow-md whitespace-nowrap border max-w-24 truncate">
+            <div class="absolute -top-4 left-1/2 transform -translate-x-1/2 bg-white text-gray-800 rounded px-1 py-0.5 text-[10px] font-bold shadow-md whitespace-nowrap border max-w-[60px] truncate">
               ${bus.nickname}
             </div>
-            <div class="bg-${busColor} text-white rounded-full w-14 h-14 flex items-center justify-center text-xs font-bold shadow-lg border-2 border-white cursor-pointer hover:bg-${busColor.replace('600', '700')} transition-colors">
-              <div class="text-lg">🚌</div>
+            <div class="bg-${busColor} text-white rounded-full w-4 h-4 flex items-center justify-center text-[6px] font-bold shadow-lg border-2 border-white cursor-pointer hover:bg-${busColor.replace('600', '700')} transition-colors">
+              <div class="text-[8px]">🚌</div>
             </div>
             ${progressDisplay}
           </div>
         `,
-        className: "custom-bus-marker zoom-responsive",
-        iconSize: [56, 56],
-        iconAnchor: [28, 28],
+        className: "custom-bus-marker",
+        iconSize: [12, 12],
+        iconAnchor: [6, 6],
       })
 
       // Create popup content based on bus status
@@ -240,7 +240,7 @@ export default function BusMap({
           </div>
           <div class="space-y-1 text-sm">
             <p><strong>Driver:</strong> ${bus.crew}</p>
-            <p><strong>Status:</strong> <span class="text-${busColor.replace('600', '800')}">${statusText}</span></p>
+            <p><strong>Status:</strong> <span class="text-${busColor.replace('600', '700')}">${statusText}</span></p>
       `
 
       if (trip) {
@@ -299,21 +299,21 @@ export default function BusMap({
       parkedBuses.forEach((bus, index) => {
         const position = parkingPositions[index] || { lat: GARAGE_LOCATION.lat, lng: GARAGE_LOCATION.lng }
 
-        // Parked bus icon with zoom-responsive size
+        // Parked bus icon with fixed small size, larger nickname label
         const parkedBusIcon = L.divIcon({
           html: `
             <div class="relative bus-marker-container" style="transform-origin: center; will-change: transform;">
-              <div class="absolute -top-7 left-1/2 transform -translate-x-1/2 bg-white text-gray-800 rounded px-1 py-0.5 text-xs font-bold shadow-md whitespace-nowrap border max-w-20 truncate">
+              <div class="absolute -top-3 left-1/2 transform -translate-x-1/2 bg-white text-gray-800 rounded px-1 py-0.5 text-[10px] font-bold shadow-md whitespace-nowrap border max-w-[60px] truncate">
                 ${bus.nickname}
               </div>
-              <div class="bg-gray-500 text-white rounded-full w-10 h-10 flex items-center justify-center text-xs font-bold shadow-lg border-2 border-white cursor-pointer hover:bg-gray-600 transition-colors">
-                <div class="text-sm">🚌</div>
+              <div class="bg-gray-500 text-white rounded-full w-3 h-3 flex items-center justify-center text-[6px] font-bold shadow-lg border-2 border-white cursor-pointer hover:bg-gray-600 transition-colors">
+                <div class="text-[6px]">🚌</div>
               </div>
             </div>
           `,
-          className: "parked-bus-marker zoom-responsive",
-          iconSize: [40, 40],
-          iconAnchor: [20, 20],
+          className: "parked-bus-marker",
+          iconSize: [12, 12],
+          iconAnchor: [6, 6],
         })
 
         const parkedMarker = L.marker([position.lat, position.lng], { icon: parkedBusIcon })
@@ -409,16 +409,7 @@ export default function BusMap({
       }
     }
 
-    // Add zoom event listener to control icon scaling
-    map.on("zoomend", () => {
-      const zoom = map.getZoom()
-      const scale = Math.max(0.5, Math.min(1.5, zoom / 12)) // Scale between 0.5x and 1.5x based on zoom level
-      // Apply scaling to all bus markers
-      const busMarkers = document.querySelectorAll(".bus-marker-container")
-      busMarkers.forEach((marker) => {
-        ;(marker as HTMLElement).style.transform = `scale(${scale})`
-      })
-    })
+    // No zoom event listener for scaling, ensuring fixed size
   }, [busLocations, trips, buses, onBusClick, showControls, autoFit])
 
   return <div ref={mapRef} className="w-full h-full" style={{ minHeight: "400px" }} />
