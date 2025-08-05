@@ -1,10 +1,11 @@
 "use client"
 
-import { useEffect, useRef } from "react"
-import L from "leaflet"
+import { useEffect, useRef, useState, useCallback } from "react"
+import L, { LatLngExpression } from "leaflet"
 import "leaflet/dist/leaflet.css"
 import type { Bus, Trip, BusLocation } from "@/types"
 import { GARAGE_LOCATION } from "@/lib/tracking"
+import React from "react"
 
 // Fix for default markers
 delete (L.Icon.Default.prototype as unknown as { _getIconUrl?: unknown })._getIconUrl
@@ -21,9 +22,9 @@ interface BusMapProps {
   onBusClick?: (bus: Bus, trip?: Trip) => void
   showControls?: boolean
   autoFit?: boolean
+  activeTripId?: string
 }
 
-// Format elapsed time for display
 const formatElapsedTime = (minutes: number): string => {
   const hours = Math.floor(minutes / 60)
   const mins = Math.floor(minutes % 60)
@@ -33,10 +34,9 @@ const formatElapsedTime = (minutes: number): string => {
   return `${mins}m`
 }
 
-// Generate parking positions around garage
 const generateParkingPositions = (centerLat: number, centerLng: number, count: number) => {
   const positions = []
-  const radius = 0.002 // Radius in degrees (approximately 200 meters)
+  const radius = 0.002
   const angleStep = (2 * Math.PI) / Math.max(count, 1)
   for (let i = 0; i < count; i++) {
     const angle = i * angleStep
@@ -47,27 +47,40 @@ const generateParkingPositions = (centerLat: number, centerLng: number, count: n
   return positions
 }
 
-export default function BusMap({
+const MAX_MARKERS = 50
+
+function BusMap({
   buses,
   trips,
   busLocations,
   onBusClick,
   showControls = false,
   autoFit = false,
+  activeTripId,
 }: BusMapProps) {
   const mapRef = useRef<HTMLDivElement>(null)
   const mapInstanceRef = useRef<L.Map | null>(null)
   const markersRef = useRef<Map<string, L.Marker>>(new Map())
+  const activeRoutePolyline = useRef<L.Polyline | null>(null)
   const initializedRef = useRef(false)
+  const [activeRouteTripId, setActiveRouteTripId] = useState<string | null>(null)
+  const [selectedBus, setSelectedBus] = useState<{ bus: Bus; trip?: Trip } | null>(null)
 
+  const handleBusClick = useCallback((bus: Bus, trip?: Trip) => {
+    setSelectedBus({ bus, trip })
+    if (trip?.id && activeRouteTripId !== trip.id) {
+      setActiveRouteTripId(trip.id)
+    }
+  }, [activeRouteTripId])
+
+  // Initialize map and event handlers
   useEffect(() => {
     if (!mapRef.current || mapInstanceRef.current) return
 
-    // Initialize map centered on Java Island instead of garage
-    const javaCenter = [-7.5, 110.0] // Center of Java Island
+    const javaCenter = [-7.5, 110.0]
     const map = L.map(mapRef.current, {
       center: javaCenter as [number, number],
-      zoom: window.innerWidth < 768 ? 7 : 8, // Zoom to show Java Island
+      zoom: window.innerWidth < 768 ? 7 : 8,
       zoomControl: true,
       scrollWheelZoom: true,
       doubleClickZoom: true,
@@ -82,11 +95,11 @@ export default function BusMap({
       maxZoom: 19,
     }).addTo(map)
 
-    // Add garage marker with smaller size
+    // Add garage marker
     const garageIcon = L.divIcon({
       html: `
         <div class="relative">
-          <div class="bg-gray-600 text-white rounded-lg px-1 py-0.5 text-[10px] font-bold shadow-lg border-2 border-white whitespace-nowrap max-w-[80px] truncate">
+          <div class="bg-gray-600 text-white rounded-lg px-1 py-0.5 text-[10px] font-bold whitespace-nowrap max-w-[80px] truncate">
             🏢 ${GARAGE_LOCATION.name}
           </div>
         </div>
@@ -99,7 +112,7 @@ export default function BusMap({
     const activeBuses = buses.filter((b) => b.is_active).length
     const busesWithLocations = busLocations.length
     const inGarage = buses.length - activeBuses - busesWithLocations
-    
+
     L.marker([GARAGE_LOCATION.lat, GARAGE_LOCATION.lng], { icon: garageIcon })
       .bindPopup(`
         <div class="p-3 min-w-[200px]">
@@ -117,50 +130,92 @@ export default function BusMap({
     mapInstanceRef.current = map
     initializedRef.current = true
 
+    // Handle map click to clear route
+    const handleMapClick = () => {
+      setActiveRouteTripId(null)
+      if (activeRoutePolyline.current) {
+        map.removeLayer(activeRoutePolyline.current)
+        activeRoutePolyline.current = null
+      }
+    }
+    map.on('click', handleMapClick)
+
     return () => {
+      map.off('click', handleMapClick)
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove()
         mapInstanceRef.current = null
         initializedRef.current = false
       }
     }
-  }, [buses.length])
+  }, [])
 
+  // Effect to manage active route polyline
+  useEffect(() => {
+    if (!mapInstanceRef.current || !initializedRef.current) return
+    const map = mapInstanceRef.current
+
+    // Remove previous polyline
+    if (activeRoutePolyline.current) {
+      map.removeLayer(activeRoutePolyline.current)
+      activeRoutePolyline.current = null
+    }
+
+    // Handle active route display
+    const tripId = activeTripId || activeRouteTripId
+    if (tripId) {
+      const trip = trips.find(t => t.id === tripId)
+      if (trip?.route && trip.route.length > 0) {
+        const latLngs: LatLngExpression[] = trip.route
+          .filter(coord => typeof coord.lat === 'number' && typeof coord.lng === 'number' && !isNaN(coord.lat) && !isNaN(coord.lng))
+          .map(coord => [coord.lat, coord.lng] as [number, number])
+
+        if (latLngs.length > 0) {
+          const color = 
+            trip.status === "IN_PROGRESS" ? "#3b82f6" : 
+            trip.status === "COMPLETED" ? "#10b981" : "#6b7280"
+
+          activeRoutePolyline.current = L.polyline(latLngs, {
+            color,
+            weight: 4,
+            opacity: 0.7
+          }).addTo(map)
+
+          map.fitBounds(activeRoutePolyline.current.getBounds())
+        }
+      }
+    }
+  }, [activeTripId, activeRouteTripId, trips])
+
+  // Effect to manage bus markers
   useEffect(() => {
     if (!mapInstanceRef.current || !initializedRef.current) return
 
     const map = mapInstanceRef.current
     const markers = markersRef.current
 
-    // Clear existing bus markers
+    // Clear existing markers
     markers.forEach((marker) => map.removeLayer(marker))
     markers.clear()
 
-    // Get buses that have locations (either active trips, pending trips, or completed trips at destination)
-    const busesWithLocations = new Set(busLocations.map(loc => loc.bus_id))
-
     // Add markers for buses with locations
-    busLocations.forEach((location) => {
+    const visibleBusLocations = busLocations.slice(0, MAX_MARKERS)
+    visibleBusLocations.forEach((location) => {
       const trip = trips.find((t) => t.id === location.trip_id)
       const bus = buses.find((b) => b.id === location.bus_id)
       if (!bus) return
 
-      // Calculate actual elapsed time from trip start time and backend sync
       let elapsedMinutes = 0
       if (trip?.start_time) {
         const startTime = new Date(trip.start_time).getTime()
         const currentTime = Date.now()
         elapsedMinutes = Math.floor((currentTime - startTime) / (1000 * 60))
       }
-      
-      // Use backend elapsed time if available (more accurate)
       if (location.elapsed_time_minutes !== undefined && location.elapsed_time_minutes > 0) {
         elapsedMinutes = location.elapsed_time_minutes
       }
-
       const elapsedTime = formatElapsedTime(elapsedMinutes)
 
-      // Determine bus status and appearance
       const isActive = bus.is_active
       const isCompleted = trip?.status === "COMPLETED"
       const isPending = trip?.status === "PENDING"
@@ -195,14 +250,13 @@ export default function BusMap({
         `
       }
 
-      // Bus icon based on status (fixed small size, larger nickname label)
       const busIcon = L.divIcon({
         html: `
-          <div class="relative bus-marker-container" style="transform-origin: center; will-change: transform;">
-            <div class="absolute -top-4 left-1/2 transform -translate-x-1/2 bg-white text-gray-800 rounded px-1 py-0.5 text-[10px] font-bold shadow-md whitespace-nowrap border max-w-[60px] truncate">
+          <div class="relative">
+            <div class="absolute -top-3 left-1/2 transform -translate-x-1/2 bg-white text-gray-800 rounded px-1 py-0.5 text-[10px] font-bold whitespace-nowrap max-w-[60px] truncate">
               ${bus.nickname}
             </div>
-            <div class="bg-${busColor} text-white rounded-full w-4 h-4 flex items-center justify-center text-[6px] font-bold shadow-lg border-2 border-white cursor-pointer hover:bg-${busColor.replace('600', '700')} transition-colors">
+            <div class="bg-${busColor} text-white rounded-full w-4 h-4 flex items-center justify-center">
               <div class="text-[8px]">🚌</div>
             </div>
             ${progressDisplay}
@@ -213,7 +267,6 @@ export default function BusMap({
         iconAnchor: [6, 6],
       })
 
-      // Create popup content based on bus status
       let popupContent = `
         <div class="p-3 min-w-[250px]">
           <div class="flex items-center gap-3 mb-3">
@@ -248,15 +301,12 @@ export default function BusMap({
             <p><strong>From:</strong> ${trip.departure.name}</p>
             <p><strong>To:</strong> ${trip.destination.name}</p>
         `
-        
         if (isActive && trip.speed) {
           popupContent += `<p><strong>Speed:</strong> ${trip.speed} km/h</p>`
         }
-        
         if (location.progress !== undefined) {
           popupContent += `<p><strong>Progress:</strong> ${location.progress.toFixed(1)}%</p>`
         }
-        
         if (elapsedTime && (isActive || isCompleted)) {
           popupContent += `<p><strong>Travel Time:</strong> ${elapsedTime}</p>`
         }
@@ -282,31 +332,42 @@ export default function BusMap({
         .bindPopup(popupContent)
         .addTo(map)
 
-      // Add click handler
-      if (onBusClick) {
-        marker.on("click", () => {
-          onBusClick(bus, trip)
-        })
-      }
+      // Prevent event propagation for marker and popup
+      marker.on("click", (e) => {
+        L.DomEvent.stopPropagation(e)
+        if (onBusClick) {
+          handleBusClick(bus, trip)
+        }
+      })
+
+      // Prevent popup from closing when clicking inside
+      marker.on('popupopen', (e) => {
+        const popup = e.popup.getElement()
+        if (popup) {
+          popup.addEventListener('click', L.DomEvent.stopPropagation)
+        }
+      })
 
       markers.set(location.bus_id, marker)
     })
 
-    // Add parked buses at garage (buses without any location)
+    // Add parked buses at garage
+    const busesWithLocations = new Set(busLocations.map(loc => loc.bus_id))
     const parkedBuses = buses.filter((bus) => !busesWithLocations.has(bus.id))
-    if (parkedBuses.length > 0) {
-      const parkingPositions = generateParkingPositions(GARAGE_LOCATION.lat, GARAGE_LOCATION.lng, parkedBuses.length)
-      parkedBuses.forEach((bus, index) => {
+    const visibleParkedBuses = parkedBuses.slice(0, MAX_MARKERS - visibleBusLocations.length)
+
+    if (visibleParkedBuses.length > 0) {
+      const parkingPositions = generateParkingPositions(GARAGE_LOCATION.lat, GARAGE_LOCATION.lng, visibleParkedBuses.length)
+      visibleParkedBuses.forEach((bus, index) => {
         const position = parkingPositions[index] || { lat: GARAGE_LOCATION.lat, lng: GARAGE_LOCATION.lng }
 
-        // Parked bus icon with fixed small size, larger nickname label
         const parkedBusIcon = L.divIcon({
           html: `
-            <div class="relative bus-marker-container" style="transform-origin: center; will-change: transform;">
-              <div class="absolute -top-3 left-1/2 transform -translate-x-1/2 bg-white text-gray-800 rounded px-1 py-0.5 text-[10px] font-bold shadow-md whitespace-nowrap border max-w-[60px] truncate">
+            <div class="relative">
+              <div class="absolute -top-3 left-1/2 transform -translate-x-1/2 bg-white text-gray-800 rounded px-1 py-0.5 text-[10px] font-bold whitespace-nowrap max-w-[60px] truncate">
                 ${bus.nickname}
               </div>
-              <div class="bg-gray-500 text-white rounded-full w-3 h-3 flex items-center justify-center text-[6px] font-bold shadow-lg border-2 border-white cursor-pointer hover:bg-gray-600 transition-colors">
+              <div class="bg-gray-500 text-white rounded-full w-3 h-3 flex items-center justify-center">
                 <div class="text-[6px]">🚌</div>
               </div>
             </div>
@@ -361,24 +422,28 @@ export default function BusMap({
           `)
           .addTo(map)
 
-        // Click handler for parked buses
-        if (onBusClick) {
-          parkedMarker.on("click", (e) => {
-            // Prevent event bubbling
-            L.DomEvent.stopPropagation(e)
-            onBusClick(bus) // No trip for parked buses
-          })
-        }
+        // Prevent event propagation
+        parkedMarker.on("click", (e) => {
+          L.DomEvent.stopPropagation(e)
+          if (onBusClick) {
+            handleBusClick(bus)
+          }
+        })
+
+        parkedMarker.on('popupopen', (e) => {
+          const popup = e.popup.getElement()
+          if (popup) {
+            popup.addEventListener('click', L.DomEvent.stopPropagation)
+          }
+        })
 
         markers.set(`parked_${bus.id}`, parkedMarker)
       })
     }
 
-    // Only auto-fit if explicitly requested and there are bus locations
-    if (autoFit && busLocations.length > 0) {
-      const activeMarkers = Array.from(markers.values()).filter((marker, index) => 
-        index < busLocations.length // Only buses with locations
-      )
+    // Auto-fit bounds if requested
+    if (autoFit && visibleBusLocations.length > 0 && !activeRouteTripId && !activeTripId) {
+      const activeMarkers = Array.from(markers.values()).filter((_, index) => index < visibleBusLocations.length)
       if (activeMarkers.length > 0) {
         const group = new L.FeatureGroup(activeMarkers)
         map.fitBounds(group.getBounds().pad(0.1))
@@ -387,30 +452,28 @@ export default function BusMap({
 
     // Global functions for popup buttons
     if (showControls) {
-      // For buses with trips
-      ;(window as unknown as { showBusDetails: (busId: string, tripId: string) => void }).showBusDetails = (
+      (window as unknown as { showBusDetails: (busId: string, tripId: string) => void }).showBusDetails = (
         busId: string,
         tripId: string,
       ) => {
         const bus = buses.find((b) => b.id === busId)
         const trip = tripId ? trips.find((t) => t.id === tripId) : undefined
         if (bus && onBusClick) {
-          onBusClick(bus, trip)
+          handleBusClick(bus, trip)
         }
       }
-      // For parked buses
-      ;(window as unknown as { showParkedBusDetails: (busId: string) => void }).showParkedBusDetails = (
+      (window as unknown as { showParkedBusDetails: (busId: string) => void }).showParkedBusDetails = (
         busId: string,
       ) => {
         const bus = buses.find((b) => b.id === busId)
         if (bus && onBusClick) {
-          onBusClick(bus) // No trip for parked buses
+          handleBusClick(bus)
         }
       }
     }
-
-    // No zoom event listener for scaling, ensuring fixed size
-  }, [busLocations, trips, buses, onBusClick, showControls, autoFit])
+  }, [busLocations, trips, buses, onBusClick, showControls, autoFit, handleBusClick])
 
   return <div ref={mapRef} className="w-full h-full" style={{ minHeight: "400px" }} />
 }
+
+export default React.memo(BusMap)

@@ -28,6 +28,7 @@ export default function HomePage() {
   const [isOnline, setIsOnline] = useState(true)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [isRefreshing, setIsRefreshing] = useState(false)
+  const [showRoute, setShowRoute] = useState(false)
   const { toast } = useToast()
 
   // Real-time data synchronization dengan optimasi performa
@@ -36,7 +37,6 @@ export default function HomePage() {
     const currentTrips = realtimeStore.getTrips()
     const currentLocations = realtimeStore.getBusLocations()
     
-    // Hanya update jika data benar-benar berubah untuk mencegah re-render yang tidak perlu
     setBuses(prev => {
       const hasChanged = JSON.stringify(prev) !== JSON.stringify(currentBuses)
       return hasChanged ? [...currentBuses] : prev
@@ -65,20 +65,17 @@ export default function HomePage() {
         setError(null)
         console.log("🚀 Menginisialisasi sistem real-time enhanced...")
 
-        // Inisialisasi subscriptions real-time
         cleanup = await initializeRealtime()
 
-        // Subscribe ke perubahan store dengan update yang dioptimasi
         let updateTimeout: NodeJS.Timeout
         const unsubscribe = realtimeStore.subscribe(() => {
           clearTimeout(updateTimeout)
           updateTimeout = setTimeout(() => {
             console.log("📡 Data real-time terupdate, sinkronisasi UI...")
             syncRealTimeData()
-          }, 25) // Debounce sangat cepat untuk feel real-time
+          }, 25)
         })
 
-        // Set data awal
         syncRealTimeData()
         setIsOnline(true)
         setLoading(false)
@@ -89,7 +86,6 @@ export default function HomePage() {
           variant: "success",
         })
 
-        // Return fungsi cleanup yang enhanced
         return () => {
           unsubscribe()
           if (cleanup) cleanup()
@@ -116,16 +112,16 @@ export default function HomePage() {
     }
   }, [toast, syncRealTimeData])
 
-  // Enhanced real-time updates setiap 1 detik untuk sangat smooth
+  // Enhanced real-time updates setiap 1 detik
   useEffect(() => {
     const interval = setInterval(() => {
       syncRealTimeData()
-    }, 1000) // Sinkronisasi setiap 1 detik untuk pengalaman real-time yang sangat smooth
+    }, 1000)
     
     return () => clearInterval(interval)
   }, [syncRealTimeData])
 
-  // Update timestamp setiap detik untuk feel yang hidup
+  // Update timestamp setiap detik
   useEffect(() => {
     const interval = setInterval(() => {
       setLastUpdate(new Date().toLocaleTimeString())
@@ -134,15 +130,15 @@ export default function HomePage() {
     return () => clearInterval(interval)
   }, [])
 
-  // Handle bus click dengan informasi enhanced
+  // Handle bus click
   const handleBusClick = useCallback((bus: Bus, trip?: Trip) => {
     setSelectedBus({ bus, trip })
+    setShowRoute(false)
   }, [])
 
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true)
     try {
-      // Hanya refresh data, tidak reload seluruh komponen
       console.log("🔄 Melakukan refresh data posisi bus...")
       await initializeRealtime()
       syncRealTimeData()
@@ -223,10 +219,8 @@ export default function HomePage() {
 
   return (
     <div className="h-screen flex flex-col bg-gray-50 safe-area-inset-top safe-area-inset-bottom">
-      {/* Enhanced Global Tracker Component */}
       <GlobalTracker />
 
-      {/* Enhanced Header dengan Real-time Status */}
       <header className="bg-white shadow-sm border-b p-responsive z-10 no-select">
         <div className="flex items-center justify-between gap-responsive">
           <div className="flex items-center gap-2 md:gap-3 min-w-0 flex-1">
@@ -254,7 +248,6 @@ export default function HomePage() {
           </div>
 
           <div className="flex items-center gap-1 md:gap-2 flex-shrink-0">
-            {/* Enhanced Status Cards */}
             <div className="hidden sm:flex gap-2">
               <Card className="p-2 md:p-3 bg-white border border-gray-200">
                 <div className="text-xs md:text-sm">
@@ -276,7 +269,6 @@ export default function HomePage() {
               </Card>
             </div>
 
-            {/* Mobile Compact Status */}
             <div className="sm:hidden">
               <Card className="p-2 bg-white border border-gray-200">
                 <div className="text-xs whitespace-nowrap">
@@ -289,7 +281,6 @@ export default function HomePage() {
               </Card>
             </div>
 
-            {/* Action Buttons */}
             <Button 
               size="sm" 
               variant="outline" 
@@ -325,7 +316,6 @@ export default function HomePage() {
           </div>
         </div>
 
-        {/* Enhanced Mobile Status Bar */}
         <div className="sm:hidden mt-2 flex justify-between text-xs text-gray-600">
           <span>Active: {activeBuses.length}</span>
           <span>At Dest: {busesAtDestination.length}</span>
@@ -333,7 +323,6 @@ export default function HomePage() {
         </div>
       </header>
 
-      {/* Main Content - Enhanced Real-time Map */}
       <main className="flex-1 relative overflow-hidden">
         <BusMap
           buses={buses}
@@ -344,7 +333,6 @@ export default function HomePage() {
           autoFit={false}
         />
 
-        {/* Enhanced Last Update Info */}
         {lastUpdate && (
           <div className="absolute bottom-4 left-4 z-[1000] bg-white/95 backdrop-blur-sm px-3 py-2 rounded-full shadow-lg text-xs text-gray-600 border animate-fadeIn">
             <div className="flex items-center gap-2">
@@ -356,7 +344,6 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* Enhanced Real-time Status */}
         <div className="absolute top-4 right-4 z-[1000] bg-white/95 backdrop-blur-sm px-3 py-2 rounded-lg shadow-lg text-xs text-gray-600 border animate-fadeIn">
           <div className="flex items-center gap-2">
             <Activity className="w-2 h-2 text-green-500 animate-pulse" />
@@ -366,7 +353,6 @@ export default function HomePage() {
           </div>
         </div>
 
-        {/* Enhanced No Data Message */}
         {buses.length === 0 && !loading && (
           <div className="absolute inset-0 flex items-center justify-center bg-white/90 backdrop-blur-sm p-4">
             <div className="text-center max-w-md mx-auto p-6 animate-fadeIn">
@@ -379,7 +365,6 @@ export default function HomePage() {
         )}
       </main>
 
-      {/* Enhanced Bus Detail Dialog - UPDATED STATUS TEXT */}
       <Dialog open={!!selectedBus} onOpenChange={() => setSelectedBus(null)}>
         <DialogContent className="max-w-sm md:max-w-md mx-4 max-h-[90vh] overflow-y-auto scrollbar-thin">
           <DialogHeader>
@@ -391,7 +376,6 @@ export default function HomePage() {
 
           {selectedBus && (
             <div className="space-y-4">
-              {/* Enhanced Bus Photo */}
               <div className="relative h-32 md:h-48 w-full rounded-lg overflow-hidden bg-gray-100">
                 {selectedBus.bus.photo_url ? (
                   <img
@@ -426,8 +410,6 @@ export default function HomePage() {
                   </div>
                 )}
               </div>
-
-              {/* Enhanced Bus Info */}
               <div className="space-y-3">
                 <div>
                   <h3 className="text-lg font-semibold truncate">{selectedBus.bus.nickname}</h3>
@@ -440,7 +422,6 @@ export default function HomePage() {
                     <span className="truncate">Sopir: {selectedBus.bus.crew}</span>
                   </div>
 
-                  {/* Enhanced status display with improved text for each status */}
                   {selectedBus.trip ? (
                     <>
                       <div className="flex items-center gap-2">
@@ -465,26 +446,6 @@ export default function HomePage() {
                         </div>
                       )}
 
-                      {/* Info Gerbang Tol yang Dilalui */}
-                      {selectedBus.trip.route && (selectedBus.trip as any).tollRoute && (selectedBus.trip as any).tollRoute.length > 0 && (
-                        <div className="bg-blue-50 p-3 rounded-lg">
-                          <div className="flex items-center gap-2 mb-2">
-                            <span className="text-blue-600 text-sm font-medium">🛣️ Gerbang Tol Dilalui:</span>
-                          </div>
-                          <div className="text-xs text-blue-700 space-y-1">
-                            {(selectedBus.trip as any).tollRoute.map((toll: string, index: number) => (
-                              <div key={index} className="flex items-center gap-1">
-                                <span className="w-4 h-4 bg-blue-200 rounded-full flex items-center justify-center text-xs font-bold text-blue-800">
-                                  {index + 1}
-                                </span>
-                                <span>{toll}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Status display with improved text */}
                       {selectedBus.trip.status === "PENDING" && (
                         <div className="flex items-center gap-2">
                           <MapPin className="h-4 w-4 text-yellow-400 flex-shrink-0" />
@@ -541,6 +502,42 @@ export default function HomePage() {
                         <div className="text-sm text-gray-600">
                           Durasi: {Math.floor(selectedBus.trip.estimated_duration / 60)}j{" "}
                           {selectedBus.trip.estimated_duration % 60}m
+                        </div>
+                      )}
+
+                      {selectedBus.trip.route && (
+                        <div className="mt-4">
+                          <div className="flex justify-between items-center mb-2">
+                            <h4 className="font-medium">Rute Perjalanan</h4>
+                            <Button 
+                              size="sm" 
+                              variant="outline"
+                              onClick={() => setShowRoute(!showRoute)}
+                              className="btn-touch"
+                            >
+                              {showRoute ? "Sembunyikan Rute" : "Tampilkan Rute"}
+                            </Button>
+                          </div>
+                          
+                          {showRoute && selectedBus.trip?.route && (
+                            <div className="h-48 border rounded-lg overflow-hidden relative">
+                              <BusMap 
+                                buses={[selectedBus.bus]} 
+                                trips={selectedBus.trip ? [selectedBus.trip] : []} 
+                                busLocations={[]}
+                                showControls={false}
+                              />
+                            </div>
+                          )}
+                          
+                          {selectedBus.trip.toll_route && selectedBus.trip.toll_route.length > 0 && (
+                            <div className="mt-3">
+                              <div className="flex items-center gap-2 text-sm font-medium">
+                                <span>🛣️ Gerbang Tol Dilalui:</span>
+                                <span className="text-blue-600">{selectedBus.trip.toll_route.join(" → ")}</span>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )}
                     </>

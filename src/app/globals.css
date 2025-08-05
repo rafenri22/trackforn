@@ -191,6 +191,22 @@
     width: auto !important;
     margin: 8px 12px;
   }
+
+  /* Hapus shadow dari semua marker */
+  .leaflet-marker-icon {
+    filter: none !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+
+  /* Optimasi tambahan untuk performa */
+  .leaflet-container {
+    will-change: auto;
+  }
+
+  .leaflet-marker-icon img {
+    filter: none !important;
+  }
   
   /* Better marker visibility on mobile */
   .custom-bus-marker,
