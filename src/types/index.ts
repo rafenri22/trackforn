@@ -39,10 +39,10 @@ export interface RouteTemplate {
   id: string
   name: string
   code: string
-  description?: string
+  description?: string | null
   segments: RouteSegment[]
-  total_distance?: number
-  estimated_duration?: number
+  total_distance?: number | null
+  estimated_duration?: number | null
   created_at: string
   updated_at: string
 }
@@ -50,25 +50,25 @@ export interface RouteTemplate {
 export interface Trip {
   id: string
   bus_id: string
-  route_template_id?: string // Optional: if using route template
+  route_template_id?: string | null
   departure: Location
   stops: Stop[]
   destination: Location
   route: { lat: number; lng: number }[]
-  segments?: RouteSegment[] // New: detailed route segments
-  distance?: number
-  estimated_duration?: number
+  segments?: RouteSegment[]
+  distance?: number | null
+  estimated_duration?: number | null
   status: "PENDING" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED"
   progress: number
-  current_lat?: number
-  current_lng?: number
+  current_lat?: number | null
+  current_lng?: number | null
   speed: number // km/h
-  start_time?: string
-  end_time?: string
+  start_time?: string | null
+  end_time?: string | null
   created_at: string
   updated_at: string
-  toll_info?: string // Info gerbang tol yang dilalui
-  toll_route?: string[] // Array rute gerbang tol berurutan
+  toll_info?: string | null
+  toll_route?: string[] | null
 }
 
 export interface BusLocation {
@@ -78,7 +78,7 @@ export interface BusLocation {
   lat: number
   lng: number
   progress: number
-  elapsed_time_minutes?: number // Make this optional
+  elapsed_time_minutes?: number
   timestamp: number
   created_at: string
 }
@@ -100,7 +100,7 @@ export interface UpdateBusRequest {
 
 export interface CreateTripRequest {
   bus_id: string
-  route_template_id?: string
+  route_template_id?: string | null
   departure: Location
   stops: Stop[]
   destination: Location
@@ -114,6 +114,6 @@ export interface BusWithTrip extends Bus {
 export interface CreateRouteTemplateRequest {
   name: string
   code: string
-  description?: string
+  description?: string | null
   segments: RouteSegment[]
 }

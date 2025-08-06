@@ -1,19 +1,30 @@
 "use client"
 
-import { useState, useCallback } from "react"
+import { useState, useCallback, useEffect } from "react"
+import dynamic from "next/dynamic"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Loading } from "@/components/ui/loading"
-import { Plus, MapPin, Navigation, Clock, Trash2, ArrowDown, Edit2 } from "lucide-react"
+import { Plus, MapPin, Navigation, Clock, Trash2, ArrowDown, Edit2, Eye, EyeOff, AlertTriangle, Info } from "lucide-react"
 import type { Location, RouteSegment, TollGate } from "@/types"
-import { TOLL_GATES, findNearestTollGates } from "@/lib/routing"
+import { TOLL_GATES, findNearestTollGates, calculateRouteFromSegments } from "@/lib/routing"
 import LocationPicker from "./LocationPicker"
+
+const BusMap = dynamic(() => import("@/components/map/BusMap"), {
+  ssr: false,
+  loading: () => <Loading text="Loading route preview..." />
+});
 
 interface RouteBuilderProps {
   onSegmentsChange: (segments: RouteSegment[]) => void
+  onRouteDataChange?: (routeData: {
+    coordinates: { lat: number; lng: number }[]
+    distance: number
+    duration: number
+  } | null) => void
   initialSegments?: RouteSegment[]
 }
 
@@ -25,7 +36,30 @@ interface BuilderStep {
   data?: any
 }
 
-export default function RouteBuilder({ onSegmentsChange, initialSegments = [] }: RouteBuilderProps) {
+// Mock trip for route preview
+const createMockTrip = (segments: RouteSegment[], routeCoordinates: { lat: number; lng: number }[]) => {
+  const departureSegment = segments.find(s => s.type === 'departure') || segments[0]
+  const destinationSegment = segments.find(s => s.type === 'destination') || segments[segments.length - 1]
+  
+  if (!departureSegment || !destinationSegment) return null
+  
+  return {
+    id: 'preview',
+    bus_id: 'preview',
+    departure: departureSegment.location,
+    stops: segments.filter(s => s.type === 'stop').map(s => ({ ...s.location, duration: s.stop_duration || 30 })),
+    destination: destinationSegment.location,
+    route: routeCoordinates,
+    segments: segments,
+    status: 'PENDING' as const,
+    progress: 0,
+    speed: 50,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  }
+}
+
+export default function RouteBuilder({ onSegmentsChange, onRouteDataChange, initialSegments = [] }: RouteBuilderProps) {
   const [segments, setSegments] = useState<RouteSegment[]>(initialSegments)
   const [currentStep, setCurrentStep] = useState<BuilderStep | null>(null)
   const [showLocationPicker, setShowLocationPicker] = useState(false)
@@ -33,6 +67,147 @@ export default function RouteBuilder({ onSegmentsChange, initialSegments = [] }:
   const [nearbyTollGates, setNearbyTollGates] = useState<TollGate[]>([])
   const [tempLocation, setTempLocation] = useState<Location | null>(null)
   const [tempStopDuration, setTempStopDuration] = useState(30)
+  const [showRoutePreview, setShowRoutePreview] = useState(false)
+  const [routeData, setRouteData] = useState<{
+    coordinates: { lat: number; lng: number }[]
+    distance: number
+    duration: number
+  } | null>(null)
+  const [isCalculatingRoute, setIsCalculatingRoute] = useState(false)
+  const [isPartialPreview, setIsPartialPreview] = useState(false)
+
+  // FIXED: Enhanced route calculation with better error handling
+  const calculateRoutePreview = useCallback(async () => {
+    console.log("🔧 RouteBuilder: Starting route calculation with", segments.length, "segments")
+    
+    if (segments.length === 0) {
+      console.log("🔧 RouteBuilder: No segments, clearing route data")
+      setRouteData(null)
+      setIsPartialPreview(false)
+      onRouteDataChange?.(null)
+      return
+    }
+
+    // Check route completeness
+    let previewSegments: RouteSegment[] = [...segments]
+    let isPartial = false
+    
+    const hasRealDeparture = segments.some(s => s.type === 'departure')
+    const hasRealDestination = segments.some(s => s.type === 'destination')
+    
+    // Always try to calculate some preview, even if partial
+    if (!hasRealDeparture || !hasRealDestination) {
+      isPartial = true
+      console.log('🔧 RouteBuilder: Creating partial preview')
+      
+      // Create temporary segments for preview
+      if (!hasRealDeparture && segments.length > 0) {
+        const firstSegment = segments[0]
+        const tempDeparture: RouteSegment = {
+          id: 'temp-departure',
+          type: 'departure',
+          location: {
+            name: `Start: ${firstSegment.location.name}`,
+            lat: firstSegment.location.lat,
+            lng: firstSegment.location.lng
+          },
+          order: 0
+        }
+        previewSegments = [tempDeparture, ...segments.map(s => ({ ...s, order: s.order + 1 }))]
+      }
+      
+      if (!hasRealDestination && segments.length > 0) {
+        const lastSegment = segments[segments.length - 1]
+        const tempDestination: RouteSegment = {
+          id: 'temp-destination',
+          type: 'destination',
+          location: {
+            name: `End: ${lastSegment.location.name}`,
+            lat: lastSegment.location.lat,
+            lng: lastSegment.location.lng
+          },
+          order: previewSegments.length
+        }
+        previewSegments = [...previewSegments, tempDestination]
+      }
+    }
+
+    if (previewSegments.length < 2) {
+      console.log('🔧 RouteBuilder: Not enough segments for preview')
+      setRouteData(null)
+      setIsPartialPreview(false)
+      onRouteDataChange?.(null)
+      return
+    }
+
+    setIsCalculatingRoute(true)
+    setIsPartialPreview(isPartial)
+    
+    try {
+      console.log(`🗺️ RouteBuilder: Calculating ${isPartial ? 'PARTIAL' : 'COMPLETE'} route with ${previewSegments.length} segments`)
+      
+      const result = await calculateRouteFromSegments(previewSegments)
+      
+      const routePreviewData = {
+        coordinates: result.coordinates,
+        distance: result.distance,
+        duration: result.duration
+      }
+      
+      setRouteData(routePreviewData)
+      
+      // FIXED: Always call callback, let parent decide what to do with partial data
+      if (!isPartial && onRouteDataChange) {
+        onRouteDataChange(routePreviewData)
+        console.log(`✅ RouteBuilder: COMPLETE route calculated and passed to parent: ${result.distance.toFixed(1)}km`)
+      } else if (onRouteDataChange) {
+        // For partial routes, still pass the data but mark it appropriately
+        onRouteDataChange(isPartial ? null : routePreviewData)
+        console.log(`⚠️ RouteBuilder: ${isPartial ? 'PARTIAL' : 'COMPLETE'} route calculated: ${result.distance.toFixed(1)}km`)
+      }
+      
+    } catch (error) {
+      console.error('RouteBuilder: Error calculating route preview:', error)
+      setRouteData(null)
+      setIsPartialPreview(false)
+      onRouteDataChange?.(null)
+    } finally {
+      setIsCalculatingRoute(false)
+    }
+  }, [segments, onRouteDataChange])
+
+  // Auto-calculate route preview when segments change
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      calculateRoutePreview()
+    }, 500) // Increased debounce time
+
+    return () => clearTimeout(timeoutId)
+  }, [calculateRoutePreview])
+
+  // FIXED: Better segment update with validation
+  const updateSegments = useCallback((newSegments: RouteSegment[]) => {
+    console.log("🔧 RouteBuilder: Updating segments:", newSegments.length)
+    
+    // Validate segments
+    const validSegments = newSegments.filter(segment => {
+      const isValid = segment && 
+                     segment.location && 
+                     typeof segment.location.lat === 'number' && 
+                     typeof segment.location.lng === 'number' &&
+                     !isNaN(segment.location.lat) && 
+                     !isNaN(segment.location.lng)
+      
+      if (!isValid) {
+        console.warn("RouteBuilder: Invalid segment filtered out:", segment)
+      }
+      
+      return isValid
+    })
+    
+    setSegments(validSegments)
+    onSegmentsChange(validSegments)
+  }, [onSegmentsChange])
 
   const handleAddSegment = useCallback(() => {
     if (segments.length === 0) {
@@ -53,6 +228,8 @@ export default function RouteBuilder({ onSegmentsChange, initialSegments = [] }:
   }, [segments])
 
   const handleLocationSelect = useCallback((location: Location) => {
+    console.log("🔧 RouteBuilder: Location selected:", location.name)
+    
     if (currentStep?.type === 'location') {
       setTempLocation(location)
       setShowLocationPicker(false)
@@ -66,8 +243,7 @@ export default function RouteBuilder({ onSegmentsChange, initialSegments = [] }:
           order: segments.length + 1
         }
         const newSegments = [...segments, newSegment]
-        setSegments(newSegments)
-        onSegmentsChange(newSegments)
+        updateSegments(newSegments)
         setCurrentStep(null)
       } else if (currentStep.data?.segmentType === 'stop') {
         // Ask for stop duration
@@ -85,12 +261,11 @@ export default function RouteBuilder({ onSegmentsChange, initialSegments = [] }:
           order: segments.length + 1
         }
         const newSegments = [...segments, newSegment]
-        setSegments(newSegments)
-        onSegmentsChange(newSegments)
+        updateSegments(newSegments)
         setCurrentStep(null)
       }
     }
-  }, [currentStep, segments, onSegmentsChange])
+  }, [currentStep, segments, updateSegments])
 
   const handleTollOrStopChoice = useCallback((choice: 'toll' | 'stop' | 'destination') => {
     if (choice === 'toll') {
@@ -136,7 +311,7 @@ export default function RouteBuilder({ onSegmentsChange, initialSegments = [] }:
     }
     
     const newSegments = [...segments, tollEntrySegment]
-    setSegments(newSegments)
+    updateSegments(newSegments)
     
     // Now ask for toll exit
     setCurrentStep({
@@ -145,7 +320,7 @@ export default function RouteBuilder({ onSegmentsChange, initialSegments = [] }:
       data: { entryGate: tollGate }
     })
     // Keep toll picker open for exit selection
-  }, [currentStep, segments])
+  }, [currentStep, segments, updateSegments])
 
   const handleTollExitSelect = useCallback((tollGate: TollGate) => {
     // Add toll exit segment
@@ -162,11 +337,10 @@ export default function RouteBuilder({ onSegmentsChange, initialSegments = [] }:
     }
     
     const newSegments = [...segments, tollExitSegment]
-    setSegments(newSegments)
-    onSegmentsChange(newSegments)
+    updateSegments(newSegments)
     setShowTollPicker(false)
     setCurrentStep(null)
-  }, [currentStep, segments, onSegmentsChange])
+  }, [currentStep, segments, updateSegments])
 
   const handleStopDurationSubmit = useCallback(() => {
     if (currentStep && currentStep.data?.location) {
@@ -178,19 +352,17 @@ export default function RouteBuilder({ onSegmentsChange, initialSegments = [] }:
         order: segments.length + 1
       }
       const newSegments = [...segments, newSegment]
-      setSegments(newSegments)
-      onSegmentsChange(newSegments)
+      updateSegments(newSegments)
       setCurrentStep(null)
       setTempStopDuration(30)
     }
-  }, [currentStep, segments, onSegmentsChange, tempStopDuration])
+  }, [currentStep, segments, updateSegments, tempStopDuration])
 
   const handleRemoveSegment = useCallback((segmentId: string) => {
     const newSegments = segments.filter(s => s.id !== segmentId)
       .map((s, index) => ({ ...s, order: index + 1 }))
-    setSegments(newSegments)
-    onSegmentsChange(newSegments)
-  }, [segments, onSegmentsChange])
+    updateSegments(newSegments)
+  }, [segments, updateSegments])
 
   const handleEditSegment = useCallback((segment: RouteSegment) => {
     if (segment.type === 'stop') {
@@ -210,18 +382,17 @@ export default function RouteBuilder({ onSegmentsChange, initialSegments = [] }:
           ? { ...s, stop_duration: tempStopDuration }
           : s
       )
-      setSegments(newSegments)
-      onSegmentsChange(newSegments)
+      updateSegments(newSegments)
       setCurrentStep(null)
       setTempStopDuration(30)
     }
-  }, [currentStep, segments, onSegmentsChange, tempStopDuration])
+  }, [currentStep, segments, updateSegments, tempStopDuration])
 
   const getSegmentIcon = (type: string) => {
     switch (type) {
       case 'departure': return '🚌'
-      case 'toll_entry': return '🛣️'
-      case 'toll_exit': return '🛣️'
+      case 'toll_entry': return '🛣️ ↗️'
+      case 'toll_exit': return '🛣️ ↙️'
       case 'stop': return '⏱️'
       case 'destination': return '🏁'
       default: return '📍'
@@ -239,7 +410,11 @@ export default function RouteBuilder({ onSegmentsChange, initialSegments = [] }:
     }
   }
 
-  const canAddDestination = segments.length > 0 && !segments.some(s => s.type === 'destination')
+  // Check route status
+  const hasRealDeparture = segments.some(s => s.type === 'departure')
+  const hasRealDestination = segments.some(s => s.type === 'destination')
+  const isRouteComplete = hasRealDeparture && hasRealDestination
+  const mockTrip = routeData ? createMockTrip(segments, routeData.coordinates) : null
 
   return (
     <div className="space-y-4">
@@ -247,7 +422,8 @@ export default function RouteBuilder({ onSegmentsChange, initialSegments = [] }:
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Navigation className="h-5 w-5" />
-            Route Builder
+            Route Builder with Real Roads
+            {isPartialPreview && <AlertTriangle className="h-4 w-4 text-yellow-500" />}
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -303,7 +479,7 @@ export default function RouteBuilder({ onSegmentsChange, initialSegments = [] }:
               </Button>
             ) : (
               <>
-                {!segments.some(s => s.type === 'destination') && (
+                {!hasRealDestination && (
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                     <Button
                       variant="outline"
@@ -331,6 +507,101 @@ export default function RouteBuilder({ onSegmentsChange, initialSegments = [] }:
               </>
             )}
           </div>
+
+          {/* Route Preview */}
+          {segments.length >= 1 && (
+            <div className="mt-4 pt-4 border-t">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="font-medium flex items-center gap-2">
+                  🗺️ Real Route Preview
+                  {isCalculatingRoute && <Loading size="sm" />}
+                  {routeData && !isPartialPreview && <span className="text-green-600 text-xs">✅ Ready</span>}
+                  {routeData && isPartialPreview && <span className="text-yellow-600 text-xs">⚠️ Partial</span>}
+                </h4>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setShowRoutePreview(!showRoutePreview)}
+                  className="btn-touch"
+                >
+                  {showRoutePreview ? <EyeOff className="h-4 w-4 mr-1" /> : <Eye className="h-4 w-4 mr-1" />}
+                  {showRoutePreview ? 'Hide Map' : 'Show Map'}
+                </Button>
+              </div>
+
+              {/* Status indicators */}
+              {!isRouteComplete && segments.length > 0 && (
+                <div className="mb-3 p-2 bg-yellow-50 rounded border border-yellow-200">
+                  <div className="flex items-center gap-2 text-yellow-800">
+                    <Info className="h-4 w-4" />
+                    <span className="text-sm font-medium">Building Route...</span>
+                  </div>
+                  <ul className="text-xs text-yellow-700 mt-1 ml-6 space-y-1">
+                    {!hasRealDeparture && <li>• Add departure point to start</li>}
+                    {!hasRealDestination && <li>• Add destination point to complete</li>}
+                  </ul>
+                </div>
+              )}
+
+              {routeData && (
+                <div className="space-y-2 text-sm">
+                  <div className={`grid grid-cols-3 gap-4 p-2 rounded ${isPartialPreview ? 'bg-yellow-50' : 'bg-blue-50'}`}>
+                    <div>
+                      <span className={`font-medium ${isPartialPreview ? 'text-yellow-600' : 'text-blue-600'}`}>Distance:</span>
+                      <div className="font-bold">{routeData.distance.toFixed(1)} km</div>
+                    </div>
+                    <div>
+                      <span className={`font-medium ${isPartialPreview ? 'text-yellow-600' : 'text-blue-600'}`}>Duration:</span>
+                      <div className="font-bold">{Math.floor(routeData.duration / 60)}h {routeData.duration % 60}m</div>
+                    </div>
+                    <div>
+                      <span className={`font-medium ${isPartialPreview ? 'text-yellow-600' : 'text-blue-600'}`}>Route Points:</span>
+                      <div className="font-bold">{routeData.coordinates.length}</div>
+                    </div>
+                  </div>
+
+                  {/* Status message */}
+                  {isPartialPreview ? (
+                    <div className="p-2 bg-yellow-50 rounded text-xs text-yellow-700 border border-yellow-200">
+                      ⚠️ <strong>Partial Preview:</strong> Add departure and destination for complete route
+                    </div>
+                  ) : (
+                    <div className="p-2 bg-green-50 rounded text-xs text-green-700 border border-green-200">
+                      ✅ <strong>Route Ready:</strong> This exact route will be used when the bus runs
+                    </div>
+                  )}
+                  
+                  {showRoutePreview && mockTrip && (
+                    <div className="mt-3">
+                      <div className="h-64 border rounded-lg overflow-hidden bg-gray-100">
+                        <BusMap 
+                          buses={[]}
+                          trips={[mockTrip]}
+                          busLocations={[]}
+                          showControls={false}
+                          autoFit={true}
+                          activeTripId="preview"
+                        />
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1 text-center">
+                        {isPartialPreview ? 
+                          '⚠️ Preview showing partial route with current segments' :
+                          '✅ Preview showing REAL road routing that will be used in actual trip'
+                        }
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {!routeData && !isCalculatingRoute && segments.length >= 1 && (
+                <div className="text-center py-4 text-red-500">
+                  <p className="text-sm">❌ Unable to calculate route preview</p>
+                  <p className="text-xs">Please check your segment locations</p>
+                </div>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -362,25 +633,31 @@ export default function RouteBuilder({ onSegmentsChange, initialSegments = [] }:
             </DialogHeader>
             
             <div className="space-y-2">
-              {nearbyTollGates.map((gate) => (
-                <Button
-                  key={gate.name}
-                  variant="outline"
-                  onClick={() => {
-                    if (currentStep?.type === 'toll_entry') {
-                      handleTollEntrySelect(gate)
-                    } else {
-                      handleTollExitSelect(gate)
-                    }
-                  }}
-                  className="w-full text-left justify-start btn-touch"
-                >
-                  <div className="flex items-center gap-2">
-                    <span>🛣️</span>
-                    <span>{gate.name}</span>
-                  </div>
-                </Button>
-              ))}
+              {nearbyTollGates.length > 0 ? (
+                nearbyTollGates.map((gate) => (
+                  <Button
+                    key={gate.name}
+                    variant="outline"
+                    onClick={() => {
+                      if (currentStep?.type === 'toll_entry') {
+                        handleTollEntrySelect(gate)
+                      } else {
+                        handleTollExitSelect(gate)
+                      }
+                    }}
+                    className="w-full text-left justify-start btn-touch"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span>🛣️</span>
+                      <span>{gate.name}</span>
+                    </div>
+                  </Button>
+                ))
+              ) : (
+                <div className="text-center py-4 text-gray-500">
+                  <p className="text-sm">Tidak ada gerbang tol di sekitar area ini</p>
+                </div>
+              )}
             </div>
           </DialogContent>
         </Dialog>

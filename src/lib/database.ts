@@ -99,7 +99,7 @@ export const deleteRouteTemplate = async (templateId: string): Promise<void> => 
   if (error) throw error
 }
 
-// Trip operations
+// FIXED: Trip operations with better error handling
 export const getTrips = async (): Promise<Trip[]> => {
   const { data, error } = await supabase.from("trips").select("*").order("created_at", { ascending: false })
 
@@ -108,26 +108,92 @@ export const getTrips = async (): Promise<Trip[]> => {
 }
 
 export const createTrip = async (tripData: CreateTripRequest): Promise<Trip> => {
-  const { data, error } = await supabase
-    .from("trips")
-    .insert({
-      bus_id: tripData.bus_id,
-      route_template_id: tripData.route_template_id,
+  try {
+    console.log("Creating trip with data:", tripData)
+    
+    // FIXED: Better validation
+    if (!tripData.bus_id || !tripData.bus_id.trim()) {
+      throw new Error("Bus ID is required")
+    }
+    
+    if (!tripData.departure || !tripData.departure.name || 
+        typeof tripData.departure.lat !== 'number' || typeof tripData.departure.lng !== 'number') {
+      throw new Error("Valid departure location is required")
+    }
+    
+    if (!tripData.destination || !tripData.destination.name ||
+        typeof tripData.destination.lat !== 'number' || typeof tripData.destination.lng !== 'number') {
+      throw new Error("Valid destination location is required")
+    }
+
+    // FIXED: Clean and validate stops
+    const validStops = (tripData.stops || []).filter(stop => 
+      stop && stop.name && typeof stop.lat === 'number' && typeof stop.lng === 'number'
+    )
+
+    // FIXED: Clean and validate segments
+    const validSegments = (tripData.segments || []).filter(segment =>
+      segment && segment.location && segment.location.name &&
+      typeof segment.location.lat === 'number' && typeof segment.location.lng === 'number'
+    )
+
+    const insertData = {
+      bus_id: tripData.bus_id.trim(),
       departure: tripData.departure,
-      stops: tripData.stops,
+      stops: validStops,
       destination: tripData.destination,
       current_lat: tripData.departure.lat,
       current_lng: tripData.departure.lng,
-    })
-    .select()
-    .single()
+      progress: 0,
+      status: 'PENDING' as const,
+      speed: 50, // Default speed
+    }
 
-  if (error) throw error
-  return data
+    // Add optional fields only if they have valid values
+    if (tripData.route_template_id && tripData.route_template_id.trim()) {
+      (insertData as any).route_template_id = tripData.route_template_id.trim()
+    }
+    
+    if (validSegments.length > 0) {
+      (insertData as any).segments = validSegments
+    }
+
+    console.log("Inserting trip data:", insertData)
+    
+    const { data, error } = await supabase
+      .from("trips")
+      .insert(insertData)
+      .select()
+      .single()
+
+    if (error) {
+      console.error("Supabase error details:", {
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+        code: error.code
+      })
+      throw error
+    }
+    
+    console.log("Trip created successfully:", data.id)
+    return data
+  } catch (err) {
+    console.error("Error in createTrip:", err)
+    throw err
+  }
 }
 
 export const updateTrip = async (tripId: string, updates: Partial<Trip>): Promise<void> => {
-  const { error } = await supabase.from("trips").update(updates).eq("id", tripId)
+  // FIXED: Clean updates object
+  const cleanUpdates = Object.entries(updates).reduce((acc, [key, value]) => {
+    if (value !== undefined && value !== null) {
+      acc[key] = value
+    }
+    return acc
+  }, {} as any)
+
+  const { error } = await supabase.from("trips").update(cleanUpdates).eq("id", tripId)
 
   if (error) throw error
 }
@@ -168,10 +234,15 @@ export const updateBusLocation = async (location: Omit<BusLocation, "id" | "crea
   // Delete old location for this bus
   await supabase.from("bus_locations").delete().eq("bus_id", location.bus_id)
 
-  // Insert new location with default elapsed_time_minutes if not provided
+  // FIXED: Clean location data
   const locationData = {
-    ...location,
+    bus_id: location.bus_id,
+    trip_id: location.trip_id,
+    lat: location.lat,
+    lng: location.lng,
+    progress: location.progress,
     elapsed_time_minutes: location.elapsed_time_minutes || 0,
+    timestamp: location.timestamp,
   }
 
   const { error } = await supabase.from("bus_locations").insert(locationData)

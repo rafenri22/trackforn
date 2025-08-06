@@ -178,7 +178,7 @@ function BusMap({
     }
   }, [handleUserInteraction])
 
-  // Effect to manage active route polyline - FIXED: No auto-fitting when showing route
+  // Effect to manage active route polyline - IMPROVED with real route display
   useEffect(() => {
     if (!mapInstanceRef.current || !initializedRef.current) return
     const map = mapInstanceRef.current
@@ -194,6 +194,8 @@ function BusMap({
     if (tripId) {
       const trip = trips.find(t => t.id === tripId)
       if (trip?.route && trip.route.length > 0) {
+        console.log(`🗺️ Displaying route for trip ${tripId.slice(0, 8)} with ${trip.route.length} points`)
+        
         const latLngs: LatLngExpression[] = trip.route
           .filter(coord => typeof coord.lat === 'number' && typeof coord.lng === 'number' && !isNaN(coord.lat) && !isNaN(coord.lng))
           .map(coord => [coord.lat, coord.lng] as [number, number])
@@ -203,18 +205,21 @@ function BusMap({
             trip.status === "IN_PROGRESS" ? "#3b82f6" : 
             trip.status === "COMPLETED" ? "#10b981" : "#6b7280"
 
+          // IMPROVED: Better route styling for real roads
           activeRoutePolyline.current = L.polyline(latLngs, {
             color,
             weight: 4,
-            opacity: 0.7
+            opacity: 0.8,
+            smoothFactor: 1, // Smooth the polyline for better appearance
+            lineCap: 'round',
+            lineJoin: 'round'
           }).addTo(map)
 
-          // DON'T auto-fit bounds - let user control the map manually
-          // map.fitBounds(activeRoutePolyline.current.getBounds())
+          console.log(`✅ Route displayed with ${latLngs.length} coordinate points following real roads`)
         }
       }
     }
-  }, [activeTripId, activeRouteTripId, trips]) // Removed isUserInteracting dependency
+  }, [activeTripId, activeRouteTripId, trips])
 
   // Effect to manage bus markers
   useEffect(() => {
@@ -250,7 +255,7 @@ function BusMap({
       const isPending = trip?.status === "PENDING"
       
       let busColor = "blue-600"
-      let statusText = "Sedang dalam Perjalanan"
+      let statusText = "Sedang dalam Perjalanan di Jalan Real"
       let progressDisplay = ""
       
       if (isPending) {
@@ -263,7 +268,7 @@ function BusMap({
         `
       } else if (isCompleted) {
         busColor = "green-600"
-        statusText = "Sudah Sampai di Titik Akhir"
+        statusText = "Sudah Sampai di Titik Akhir (Parkir)"
         progressDisplay = `
           <div class="absolute -bottom-2 left-1/2 transform -translate-x-1/2 bg-green-500 text-white rounded-full px-0.5 py-0.25 text-[6px] font-bold whitespace-nowrap">
             Arrived
@@ -271,7 +276,7 @@ function BusMap({
         `
       } else if (isActive) {
         busColor = "blue-600"
-        statusText = "Sedang dalam Perjalanan"
+        statusText = "Mengikuti Jalan Real (OSRM)"
         progressDisplay = `
           <div class="absolute -bottom-2 left-1/2 transform -translate-x-1/2 bg-blue-500 text-white rounded-full px-0.5 py-0.25 text-[6px] font-bold whitespace-nowrap">
             ${elapsedTime}
@@ -326,18 +331,23 @@ function BusMap({
       `
 
       if (trip) {
+        const routeType = trip.segments && trip.segments.some(s => s.type === 'toll_entry') ? '🛣️ Toll Route' : '🚗 Regular Route'
         popupContent += `
             <p><strong>From:</strong> ${trip.departure.name}</p>
             <p><strong>To:</strong> ${trip.destination.name}</p>
+            <p><strong>Route Type:</strong> ${routeType}</p>
         `
         if (isActive && trip.speed) {
-          popupContent += `<p><strong>Speed:</strong> ${trip.speed} km/h</p>`
+          popupContent += `<p><strong>Current Speed:</strong> ${trip.speed} km/h</p>`
         }
         if (location.progress !== undefined) {
           popupContent += `<p><strong>Progress:</strong> ${location.progress.toFixed(1)}%</p>`
         }
         if (elapsedTime && (isActive || isCompleted)) {
           popupContent += `<p><strong>Travel Time:</strong> ${elapsedTime}</p>`
+        }
+        if (trip.route && trip.route.length > 0) {
+          popupContent += `<p><strong>Route Points:</strong> ${trip.route.length} (Real Roads)</p>`
         }
       }
 
@@ -352,7 +362,7 @@ function BusMap({
               </button>
               ${trip && isActive ? `
                 <button onclick="window.toggleRoute('${trip.id}')" class="w-full bg-green-600 text-white px-3 py-2 rounded text-sm hover:bg-green-700">
-                  ${activeRouteTripId === trip.id ? 'Hide Route' : 'Show Route'}
+                  ${activeRouteTripId === trip.id ? 'Hide Route' : 'Show Real Route'}
                 </button>
               ` : ''}
             </div>
@@ -448,7 +458,7 @@ function BusMap({
               <div class="space-y-1 text-sm">
                 <p><strong>Driver:</strong> ${bus.crew}</p>
                 <p><strong>Status:</strong> <span class="text-gray-600">Tersedia di ${GARAGE_LOCATION.name}</span></p>
-                <p><strong>Location:</strong> <span class="text-green-600">Ready for Trip</span></p>
+                <p><strong>Location:</strong> <span class="text-green-600">Ready for Real Route Trip</span></p>
               </div>
               ${
                 showControls

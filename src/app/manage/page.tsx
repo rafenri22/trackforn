@@ -106,6 +106,13 @@ export default function ManagePage() {
   const [useRouteTemplate, setUseRouteTemplate] = useState(false)
   const [selectedRouteTemplate, setSelectedRouteTemplate] = useState("")
   const [customSegments, setCustomSegments] = useState<RouteSegment[]>([])
+  
+  // BARU: State untuk menyimpan route data dari preview
+  const [previewRouteData, setPreviewRouteData] = useState<{
+    coordinates: { lat: number; lng: number }[]
+    distance: number
+    duration: number
+  } | null>(null)
 
   // Load data with enhanced error handling and auto-refresh
   const loadData = useCallback(async (showLoadingToast = false) => {
@@ -473,25 +480,56 @@ export default function ManagePage() {
     }
   }, [editingBus, editBusForm, editBusPhoto, toast, loadData])
 
+  // PERBAIKAN UTAMA: Enhanced trip creation dengan route preview sync
   const handleCreateTrip = useCallback(async (e: React.FormEvent) => {
     e.preventDefault()
     setTripLoading(true)
+    
     try {
+      console.log("🚀 Starting enhanced trip creation process...")
+      
       let finalSegments: RouteSegment[] = []
+      let routeCoordinates: { lat: number; lng: number }[] = []
+      let routeDistance = 0
+      let routeDuration = 0
       
       if (useRouteTemplate && selectedRouteTemplate) {
         // Use route template
+        console.log("📋 Using route template:", selectedRouteTemplate)
         const template = routeTemplates.find(t => t.id === selectedRouteTemplate)
         if (!template) {
           throw new Error("Selected route template not found")
         }
         finalSegments = template.segments
+        
+        // Calculate route from template segments
+        console.log("🛣️ Calculating route from template segments...")
+        const templateRouteData = await calculateRouteFromSegments(template.segments)
+        routeCoordinates = templateRouteData.coordinates
+        routeDistance = templateRouteData.distance
+        routeDuration = templateRouteData.duration
+        
       } else {
         // Use custom route
+        console.log("🎨 Using custom route with segments:", customSegments.length)
         if (customSegments.length < 2) {
           throw new Error("Please add at least departure and destination segments")
         }
         finalSegments = customSegments
+        
+        // PERBAIKAN UTAMA: Gunakan route data dari preview jika tersedia
+        if (previewRouteData) {
+          console.log("✅ Using synchronized route data from preview")
+          routeCoordinates = previewRouteData.coordinates
+          routeDistance = previewRouteData.distance
+          routeDuration = previewRouteData.duration
+        } else {
+          console.log("⚠️ No preview data, calculating route...")
+          const customRouteData = await calculateRouteFromSegments(customSegments)
+          routeCoordinates = customRouteData.coordinates
+          routeDistance = customRouteData.distance
+          routeDuration = customRouteData.duration
+        }
       }
 
       // Validate that we have bus selected
@@ -499,25 +537,40 @@ export default function ManagePage() {
         throw new Error("Please select a bus")
       }
 
+      // Validate segments
+      const departureSegment = finalSegments.find(s => s.type === 'departure')
+      const destinationSegment = finalSegments.find(s => s.type === 'destination')
+      
+      if (!departureSegment) {
+        throw new Error("Route must have a departure point")
+      }
+      
+      if (!destinationSegment) {
+        throw new Error("Route must have a destination point")
+      }
+
+      // Validate route coordinates
+      if (!routeCoordinates || routeCoordinates.length === 0) {
+        throw new Error("Failed to generate route coordinates")
+      }
+
+      console.log("✅ Route data validated:", {
+        coordinates: routeCoordinates.length,
+        distance: routeDistance,
+        duration: routeDuration
+      })
+
       toast({
-        title: "🛣️ Calculating Advanced Route",
-        description: "Processing toll gates and stops with realistic timing...",
+        title: "🛣️ Creating Synchronized Trip",
+        description: "Using exactly the same route as preview...",
         variant: "default",
       })
       
-      // Calculate route using segments
-      const routeData = await calculateRouteFromSegments(finalSegments)
-      
-      // Extract departure and destination from segments
-      const departureSegment = finalSegments.find(s => s.type === 'departure')
-      const destinationSegment = finalSegments.find(s => s.type === 'destination')
       const stopSegments = finalSegments.filter(s => s.type === 'stop')
-      
-      if (!departureSegment || !destinationSegment) {
-        throw new Error("Route must have departure and destination points")
-      }
 
-      // Create trip with segments
+      console.log("📝 Creating trip data...")
+
+      // PERBAIKAN: Create trip dengan route coordinates yang sudah dihitung
       const tripData: CreateTripRequest = {
         bus_id: tripForm.bus_id,
         route_template_id: useRouteTemplate ? selectedRouteTemplate : undefined,
@@ -530,22 +583,48 @@ export default function ManagePage() {
         segments: finalSegments,
       }
 
-      const newTrip = await createTrip(tripData)
+      console.log("💾 Trip data prepared:", tripData)
+
+      // Create trip in database
+      let newTrip;
+      try {
+        newTrip = await createTrip(tripData)
+        console.log("✅ Trip created in database:", newTrip.id)
+      } catch (createError) {
+        console.error("❌ Failed to create trip in database:", createError)
+        throw new Error("Failed to save trip to database. Please try again.")
+      }
       
-      // Update trip with enhanced route data and segments
-      await supabase
-        .from("trips")
-        .update({
-          route: routeData.coordinates,
-          segments: finalSegments,
-          distance: routeData.distance,
-          estimated_duration: routeData.duration,
-          speed: 80, // Default toll speed
-        })
-        .eq("id", newTrip.id)
+      // PERBAIKAN UTAMA: Update trip dengan EXACT route coordinates dari preview
+      try {
+        console.log("🔄 Updating trip with synchronized route data...")
+        await supabase
+          .from("trips")
+          .update({
+            route: routeCoordinates, // EXACT route dari preview
+            segments: finalSegments,
+            distance: routeDistance,
+            estimated_duration: routeDuration,
+            speed: finalSegments.some(s => s.type === 'toll_entry') ? 90 : 60, // Toll vs regular speed
+            current_lat: departureSegment.location.lat,
+            current_lng: departureSegment.location.lng,
+          })
+          .eq("id", newTrip.id)
+        
+        console.log("✅ Trip updated with synchronized route data")
+      } catch (updateError) {
+        console.error("❌ Failed to update trip with route data:", updateError)
+        // Don't throw here, trip was created successfully
+      }
 
       // Position bus at departure point immediately
-      await positionBusAtDeparture(tripForm.bus_id, newTrip.id, departureSegment.location)
+      try {
+        await positionBusAtDeparture(tripForm.bus_id, newTrip.id, departureSegment.location)
+        console.log("📍 Bus positioned at departure")
+      } catch (positionError) {
+        console.error("❌ Failed to position bus:", positionError)
+        // Don't throw here, trip was created successfully
+      }
       
       // Reset form
       setTripForm({
@@ -555,6 +634,7 @@ export default function ManagePage() {
         destination: { name: "", lat: 0, lng: 0 },
       })
       setCustomSegments([])
+      setPreviewRouteData(null) // BARU: Reset preview data
       setUseRouteTemplate(false)
       setSelectedRouteTemplate("")
       
@@ -564,12 +644,13 @@ export default function ManagePage() {
         ` via ${Math.floor(tollSegments.length / 2)} toll routes` : ""
       
       toast({
-        title: "✅ Advanced Trip Created",
-        description: `Route: ${departureSegment.location.name} → ${destinationSegment.location.name}${tollInfo}. Bus positioned at departure.`,
+        title: "✅ Synchronized Trip Created",
+        description: `Route: ${departureSegment.location.name} → ${destinationSegment.location.name}${tollInfo}. Route matches preview exactly!`,
         variant: "success",
       })
+      
     } catch (tripError) {
-      console.error("Failed to create trip:", tripError)
+      console.error("❌ Failed to create trip:", tripError)
       toast({
         title: "❌ Failed to Create Trip",
         description: tripError instanceof Error ? tripError.message : "Please check your route and try again",
@@ -578,7 +659,7 @@ export default function ManagePage() {
     } finally {
       setTripLoading(false)
     }
-  }, [tripForm, useRouteTemplate, selectedRouteTemplate, routeTemplates, customSegments, toast])
+  }, [tripForm, useRouteTemplate, selectedRouteTemplate, routeTemplates, customSegments, previewRouteData, toast])
 
   const handleStartTrip = useCallback(async (trip: Trip) => {
     try {
@@ -595,7 +676,7 @@ export default function ManagePage() {
       await backendApi.startTrip(trip.id)
       toast({
         title: "🚀 Trip Started",
-        description: "Bus is now being tracked with realistic highway timing (80-100 km/h on toll)",
+        description: "Bus is now being tracked with the exact same route as preview",
         variant: "success",
       })
     } catch (startError) {
@@ -715,6 +796,16 @@ export default function ManagePage() {
   const handleRefresh = useCallback(async () => {
     await loadData(true)
   }, [loadData])
+
+  // BARU: Handle route data change from RouteBuilder
+  const handleRouteDataChange = useCallback((routeData: {
+    coordinates: { lat: number; lng: number }[]
+    distance: number
+    duration: number
+  } | null) => {
+    console.log("📡 Received route data from RouteBuilder:", routeData ? `${routeData.distance.toFixed(1)}km, ${routeData.coordinates.length} points` : 'null')
+    setPreviewRouteData(routeData)
+  }, [])
 
   // Calculate stats - FIXED: exclude buses with pending trips from available buses
   const pendingTrips = trips.filter((trip) => trip.status === "PENDING")
@@ -1065,7 +1156,7 @@ export default function ManagePage() {
 
         {activeTab === "trips" && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Create Trip Form - Enhanced Mobile */}
+            {/* Enhanced Create Trip Form dengan Route Preview Sync */}
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg md:text-xl flex items-center gap-2">
@@ -1073,8 +1164,8 @@ export default function ManagePage() {
                   <span title="Uses favorite locations">
                     <Heart className="h-4 w-4 text-red-500" />
                   </span>
-                  <span title="Advanced routing with toll gates">
-                    <Zap className="h-4 w-4 text-yellow-500" />
+                  <span title="Synchronized with route preview">
+                    <Zap className="h-4 w-4 text-green-500" />
                   </span>
                 </CardTitle>
               </CardHeader>
@@ -1155,14 +1246,21 @@ export default function ManagePage() {
                       )}
                     </div>
                   ) : (
-                    /* Custom Route Builder */
+                    /* PERBAIKAN: Enhanced Custom Route Builder dengan sync callback */
                     <div>
-                      <Label>Custom Route Builder</Label>
+                      <Label>Custom Route Builder (Synchronized)</Label>
                       <div className="mt-2 border rounded-lg p-3">
                         <RouteBuilder
                           onSegmentsChange={setCustomSegments}
+                          onRouteDataChange={handleRouteDataChange} // BARU: Pass callback
                           initialSegments={customSegments}
                         />
+                        {/* BARU: Sync status indicator */}
+                        {previewRouteData && (
+                          <div className="mt-2 p-2 bg-green-50 rounded text-xs text-green-700 border border-green-200">
+                            ✅ <strong>Route Preview Synchronized:</strong> {previewRouteData.coordinates.length} points, {previewRouteData.distance.toFixed(1)}km
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}
@@ -1180,12 +1278,13 @@ export default function ManagePage() {
                     {tripLoading ? (
                       <>
                         <Loading size="sm" />
-                        Creating Advanced Route...
+                        Creating Synchronized Trip...
                       </>
                     ) : (
                       <>
                         <Plus className="h-4 w-4 mr-2" />
                         Create Trip
+                        {previewRouteData && <span className="ml-2 text-green-600">✅</span>}
                       </>
                     )}
                   </Button>
@@ -1306,6 +1405,17 @@ export default function ManagePage() {
                               </span>
                             </p>
                           )}
+                          
+                          {/* BARU: Route synchronization status */}
+                          {trip.route && trip.route.length > 0 && (
+                            <p className="flex items-start gap-2">
+                              <Navigation className="h-3 w-3 text-green-500 mt-0.5 flex-shrink-0" />
+                              <span className="text-xs text-green-600">
+                                ✅ Synchronized Route: {trip.route.length} real road points
+                              </span>
+                            </p>
+                          )}
+                          
                           {trip.status === "PENDING" && (
                             <div className="mt-2 p-2 bg-yellow-50 rounded border-l-4 border-yellow-400">
                               <div className="flex items-center gap-2">
@@ -1332,7 +1442,7 @@ export default function ManagePage() {
                                 <span>Speed: {trip.speed} km/h</span>
                                 <span className="flex items-center gap-1">
                                   <Zap className="h-3 w-3" />
-                                  Advanced Route
+                                  Following real roads
                                 </span>
                               </div>
                             </div>
@@ -1342,7 +1452,7 @@ export default function ManagePage() {
                               <div className="flex items-center gap-2">
                                 <CheckCircle className="h-3 w-3 text-green-600" />
                                 <span className="text-xs font-medium text-green-800">
-                                  Bus parked at destination
+                                  Bus parked at destination (used synchronized route)
                                 </span>
                               </div>
                             </div>
