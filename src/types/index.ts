@@ -26,12 +26,13 @@ export interface TollGate {
 }
 
 export interface RouteSegment {
-  type: 'direct' | 'toll' | 'stop'
-  from: Location
-  to: Location
-  toll_entry?: TollGate
-  toll_exit?: TollGate
+  id: string
+  type: 'departure' | 'toll_entry' | 'toll_exit' | 'stop' | 'destination'
+  location: Location
+  toll_entry_gate?: TollGate
+  toll_exit_gate?: TollGate
   stop_duration?: number // in minutes for stops
+  order: number
 }
 
 export interface RouteTemplate {
@@ -54,6 +55,7 @@ export interface Trip {
   stops: Stop[]
   destination: Location
   route: { lat: number; lng: number }[]
+  segments?: RouteSegment[] // New: detailed route segments
   distance?: number
   estimated_duration?: number
   status: "PENDING" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED"
@@ -88,12 +90,21 @@ export interface CreateBusRequest {
   photo?: File
 }
 
+export interface UpdateBusRequest {
+  id: string
+  code?: string
+  nickname?: string
+  crew?: string
+  photo?: File
+}
+
 export interface CreateTripRequest {
   bus_id: string
   route_template_id?: string
   departure: Location
   stops: Stop[]
   destination: Location
+  segments?: RouteSegment[]
 }
 
 export interface BusWithTrip extends Bus {

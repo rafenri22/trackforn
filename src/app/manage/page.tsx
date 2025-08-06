@@ -4,18 +4,19 @@ import type React from "react"
 import dynamic from 'next/dynamic';
 import { useState, useEffect, useCallback } from "react"
 import { supabase, uploadBusPhoto, deleteBusPhoto } from "@/lib/supabase"
-import { getBuses, getTrips, createBus, updateBusPhoto, deleteBus as deleteBusFromDB, createTrip } from "@/lib/database"
-import { calculateRoute } from "@/lib/routing"
+import { getBuses, getTrips, createBus, updateBusPhoto, deleteBus as deleteBusFromDB, createTrip, updateBus } from "@/lib/database"
+import { calculateRouteFromSegments } from "@/lib/routing"
 import { backendApi } from "@/lib/backend-api"
 import { getFavoriteLocations, getMostUsedLocations } from "@/lib/favorite-locations"
-import type { Bus, Trip, CreateBusRequest, CreateTripRequest, Stop } from "@/types"
+import type { Bus, Trip, CreateBusRequest, UpdateBusRequest, CreateTripRequest, Stop, RouteTemplate, RouteSegment } from "@/types"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Loading } from "@/components/ui/loading"
 import { useToast } from "@/hooks/use-toast"
-import { ArrowLeft, Plus, BusIcon, Navigation, Trash2, Play, Upload, MapPin, Clock, Square, AlertCircle, CheckCircle, XCircle, RefreshCw, Server, Wifi, WifiOff, Heart, Zap } from 'lucide-react'
+import { ArrowLeft, Plus, BusIcon, Navigation, Trash2, Play, Upload, MapPin, Clock, Square, AlertCircle, CheckCircle, XCircle, RefreshCw, Server, Wifi, WifiOff, Heart, Zap, Edit2, Router } from 'lucide-react'
 import Link from "next/link"
 import Image from "next/image"
 
@@ -24,6 +25,14 @@ const LocationPicker = dynamic(
   { 
     ssr: false,
     loading: () => <Loading text="Loading location picker..." />
+  }
+);
+
+const RouteBuilder = dynamic(
+  () => import('@/components/map/RouteBuilder'),
+  { 
+    ssr: false,
+    loading: () => <Loading text="Loading route builder..." />
   }
 );
 
@@ -53,6 +62,7 @@ const positionBusAtDeparture = async (busId: string, tripId: string, departure: 
 export default function ManagePage() {
   const [buses, setBuses] = useState<Bus[]>([])
   const [trips, setTrips] = useState<Trip[]>([])
+  const [routeTemplates, setRouteTemplates] = useState<RouteTemplate[]>([])
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<"buses" | "trips">("buses")
   const [backendStatus, setBackendStatus] = useState<"connected" | "disconnected" | "checking">("checking")
@@ -69,6 +79,18 @@ export default function ManagePage() {
   const [busPhotoPreview, setBusPhotoPreview] = useState<string | null>(null)
   const [busLoading, setBusLoading] = useState(false)
 
+  // Edit bus state
+  const [showEditBusDialog, setShowEditBusDialog] = useState(false)
+  const [editingBus, setEditingBus] = useState<Bus | null>(null)
+  const [editBusForm, setEditBusForm] = useState<UpdateBusRequest>({
+    id: "",
+    code: "",
+    nickname: "",
+    crew: "",
+  })
+  const [editBusPhoto, setEditBusPhoto] = useState<File | null>(null)
+  const [editBusPhotoPreview, setEditBusPhotoPreview] = useState<string | null>(null)
+
   // Trip form state
   const [tripForm, setTripForm] = useState<CreateTripRequest>({
     bus_id: "",
@@ -81,6 +103,9 @@ export default function ManagePage() {
     type: "departure" | "destination" | "stop"
     index?: number
   } | null>(null)
+  const [useRouteTemplate, setUseRouteTemplate] = useState(false)
+  const [selectedRouteTemplate, setSelectedRouteTemplate] = useState("")
+  const [customSegments, setCustomSegments] = useState<RouteSegment[]>([])
 
   // Load data with enhanced error handling and auto-refresh
   const loadData = useCallback(async (showLoadingToast = false) => {
@@ -96,13 +121,18 @@ export default function ManagePage() {
         setTimeout(() => reject(new Error('Request timeout')), 10000)
       )
       
-      const [busesData, tripsData] = await Promise.race([
-        Promise.all([getBuses(), getTrips()]),
+      const [busesData, tripsData, templatesData] = await Promise.race([
+        Promise.all([
+          getBuses(), 
+          getTrips(), 
+          supabase.from('route_templates').select('*').order('created_at', { ascending: false })
+        ]),
         timeoutPromise
-      ]) as [Bus[], Trip[]]
+      ]) as [Bus[], Trip[], any]
       
       setBuses(busesData)
       setTrips(tripsData)
+      setRouteTemplates(templatesData.data || [])
       
       // Check backend status
       const health = await backendApi.healthCheck()
@@ -280,6 +310,38 @@ export default function ManagePage() {
     }
   }, [toast])
 
+  const handleEditPhotoChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) {
+      // Validate file size (max 5MB)
+      if (file.size > 5 * 1024 * 1024) {
+        toast({
+          title: "❌ File Too Large",
+          description: "Please select an image smaller than 5MB",
+          variant: "destructive",
+        })
+        return
+      }
+      
+      // Validate file type
+      if (!file.type.startsWith('image/')) {
+        toast({
+          title: "❌ Invalid File Type",
+          description: "Please select an image file",
+          variant: "destructive",
+        })
+        return
+      }
+      
+      setEditBusPhoto(file)
+      const reader = new FileReader()
+      reader.onload = (e) => {
+        setEditBusPhotoPreview(e.target?.result as string)
+      }
+      reader.readAsDataURL(file)
+    }
+  }, [toast])
+
   const handleCreateBus = useCallback(async (e: React.FormEvent) => {
     e.preventDefault()
     setBusLoading(true)
@@ -333,44 +395,157 @@ export default function ManagePage() {
     }
   }, [busForm, busPhoto, toast])
 
+  const handleEditBus = useCallback((bus: Bus) => {
+    setEditingBus(bus)
+    setEditBusForm({
+      id: bus.id,
+      code: bus.code,
+      nickname: bus.nickname,
+      crew: bus.crew,
+    })
+    setEditBusPhoto(null)
+    setEditBusPhotoPreview(bus.photo_url || null)
+    setShowEditBusDialog(true)
+  }, [])
+
+  const handleUpdateBus = useCallback(async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editingBus) return
+
+    setBusLoading(true)
+    try {
+      // Validate form
+      if (!editBusForm.code?.trim() || !editBusForm.nickname?.trim() || !editBusForm.crew?.trim()) {
+        throw new Error("All fields are required")
+      }
+      
+      // Update bus data
+      const updates: Partial<Bus> = {
+        code: editBusForm.code,
+        nickname: editBusForm.nickname,
+        crew: editBusForm.crew,
+      }
+
+      // Upload new photo if provided
+      if (editBusPhoto) {
+        try {
+          // Delete old photo first
+          await deleteBusPhoto(editingBus.id)
+          // Upload new photo
+          const photoUrl = await uploadBusPhoto(editBusPhoto, editingBus.id)
+          updates.photo_url = photoUrl
+        } catch (photoError) {
+          console.error("Photo upload failed:", photoError)
+          toast({
+            title: "⚠️ Bus Updated, Photo Failed",
+            description: "Bus data was updated but photo couldn't be uploaded",
+            variant: "default",
+          })
+        }
+      }
+
+      await updateBus(editingBus.id, updates)
+      
+      // Reset form
+      setShowEditBusDialog(false)
+      setEditingBus(null)
+      setEditBusForm({ id: "", code: "", nickname: "", crew: "" })
+      setEditBusPhoto(null)
+      setEditBusPhotoPreview(null)
+      
+      toast({
+        title: "✅ Bus Updated Successfully",
+        description: `${updates.nickname} has been updated`,
+        variant: "success",
+      })
+      
+      // Refresh data
+      loadData()
+    } catch (updateError) {
+      console.error("Failed to update bus:", updateError)
+      toast({
+        title: "❌ Failed to Update Bus",
+        description: updateError instanceof Error ? updateError.message : "Please check your input and try again",
+        variant: "destructive",
+      })
+    } finally {
+      setBusLoading(false)
+    }
+  }, [editingBus, editBusForm, editBusPhoto, toast, loadData])
+
   const handleCreateTrip = useCallback(async (e: React.FormEvent) => {
     e.preventDefault()
     setTripLoading(true)
     try {
-      // Validate form
-      if (!tripForm.bus_id || !tripForm.departure.name || !tripForm.destination.name) {
-        throw new Error("Please select bus, departure, and destination")
-      }
+      let finalSegments: RouteSegment[] = []
       
+      if (useRouteTemplate && selectedRouteTemplate) {
+        // Use route template
+        const template = routeTemplates.find(t => t.id === selectedRouteTemplate)
+        if (!template) {
+          throw new Error("Selected route template not found")
+        }
+        finalSegments = template.segments
+      } else {
+        // Use custom route
+        if (customSegments.length < 2) {
+          throw new Error("Please add at least departure and destination segments")
+        }
+        finalSegments = customSegments
+      }
+
+      // Validate that we have bus selected
+      if (!tripForm.bus_id) {
+        throw new Error("Please select a bus")
+      }
+
       toast({
-        title: "🛣️ Calculating Highway Route",
-        description: "Finding optimal toll road route and positioning bus...",
+        title: "🛣️ Calculating Advanced Route",
+        description: "Processing toll gates and stops with realistic timing...",
         variant: "default",
       })
       
-      // Calculate route using enhanced routing with toll preference
-      const routePromise = calculateRoute(tripForm.departure, tripForm.stops, tripForm.destination)
-      const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Route calculation timeout')), 20000)
-      )
+      // Calculate route using segments
+      const routeData = await calculateRouteFromSegments(finalSegments)
       
-      const routeData = await Promise.race([routePromise, timeoutPromise]) as any
+      // Extract departure and destination from segments
+      const departureSegment = finalSegments.find(s => s.type === 'departure')
+      const destinationSegment = finalSegments.find(s => s.type === 'destination')
+      const stopSegments = finalSegments.filter(s => s.type === 'stop')
       
-      // Create trip with route data
-      const newTrip = await createTrip(tripForm)
+      if (!departureSegment || !destinationSegment) {
+        throw new Error("Route must have departure and destination points")
+      }
+
+      // Create trip with segments
+      const tripData: CreateTripRequest = {
+        bus_id: tripForm.bus_id,
+        route_template_id: useRouteTemplate ? selectedRouteTemplate : undefined,
+        departure: departureSegment.location,
+        stops: stopSegments.map(s => ({
+          ...s.location,
+          duration: s.stop_duration || 30
+        })),
+        destination: destinationSegment.location,
+        segments: finalSegments,
+      }
+
+      const newTrip = await createTrip(tripData)
       
-      // Update trip with enhanced route data
+      // Update trip with enhanced route data and segments
       await supabase
         .from("trips")
         .update({
           route: routeData.coordinates,
+          segments: finalSegments,
           distance: routeData.distance,
           estimated_duration: routeData.duration,
+          speed: 80, // Default toll speed
         })
         .eq("id", newTrip.id)
 
       // Position bus at departure point immediately
-      await positionBusAtDeparture(tripForm.bus_id, newTrip.id, tripForm.departure)
+      await positionBusAtDeparture(tripForm.bus_id, newTrip.id, departureSegment.location)
       
       // Reset form
       setTripForm({
@@ -379,13 +554,18 @@ export default function ManagePage() {
         stops: [],
         destination: { name: "", lat: 0, lng: 0 },
       })
+      setCustomSegments([])
+      setUseRouteTemplate(false)
+      setSelectedRouteTemplate("")
       
-      const tollInfo = routeData.tollGates?.length > 0 ? 
-        ` via ${routeData.tollGates.length} toll gates` : ""
+      // Count toll segments for info
+      const tollSegments = finalSegments.filter(s => s.type === 'toll_entry' || s.type === 'toll_exit')
+      const tollInfo = tollSegments.length > 0 ? 
+        ` via ${Math.floor(tollSegments.length / 2)} toll routes` : ""
       
       toast({
-        title: "✅ Trip Created Successfully",
-        description: `Route: ${tripForm.departure.name} → ${tripForm.destination.name}${tollInfo}. Bus positioned at departure point.`,
+        title: "✅ Advanced Trip Created",
+        description: `Route: ${departureSegment.location.name} → ${destinationSegment.location.name}${tollInfo}. Bus positioned at departure.`,
         variant: "success",
       })
     } catch (tripError) {
@@ -398,7 +578,7 @@ export default function ManagePage() {
     } finally {
       setTripLoading(false)
     }
-  }, [tripForm, toast])
+  }, [tripForm, useRouteTemplate, selectedRouteTemplate, routeTemplates, customSegments, toast])
 
   const handleStartTrip = useCallback(async (trip: Trip) => {
     try {
@@ -415,7 +595,7 @@ export default function ManagePage() {
       await backendApi.startTrip(trip.id)
       toast({
         title: "🚀 Trip Started",
-        description: "Bus is now being tracked with realistic highway timing",
+        description: "Bus is now being tracked with realistic highway timing (80-100 km/h on toll)",
         variant: "success",
       })
     } catch (startError) {
@@ -598,6 +778,12 @@ export default function ManagePage() {
           </div>
 
           <div className="flex gap-1 md:gap-2 flex-shrink-0">
+            <Link href="/manage/routes">
+              <Button size="sm" variant="outline" className="btn-touch">
+                <Router className="h-4 w-4" />
+                <span className="hidden sm:inline ml-2">Routes</span>
+              </Button>
+            </Link>
             <Button 
               size="sm" 
               variant="outline" 
@@ -840,16 +1026,28 @@ export default function ManagePage() {
                             {bus.is_active ? "On Trip" : hasPendingTrip ? "Has Pending Trip" : "In Garage"}
                           </span>
                         </div>
-                        <Button 
-                          variant="outline" 
-                          size="sm" 
-                          onClick={() => handleDeleteBus(bus)} 
-                          disabled={!canDelete}
-                          className="btn-touch"
-                          title={!canDelete ? "Cannot delete bus with active or pending trip" : "Delete bus"}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+                        <div className="flex gap-1">
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            onClick={() => handleEditBus(bus)}
+                            disabled={bus.is_active}
+                            className="btn-touch"
+                            title={bus.is_active ? "Cannot edit bus on active trip" : "Edit bus"}
+                          >
+                            <Edit2 className="h-4 w-4" />
+                          </Button>
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            onClick={() => handleDeleteBus(bus)} 
+                            disabled={!canDelete}
+                            className="btn-touch"
+                            title={!canDelete ? "Cannot delete bus with active or pending trip" : "Delete bus"}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
                       </div>
                     )
                   })}
@@ -873,12 +1071,11 @@ export default function ManagePage() {
                 <CardTitle className="text-lg md:text-xl flex items-center gap-2">
                   Create New Trip
                   <span title="Uses favorite locations">
-  <Heart className="h-4 w-4 text-red-500" />
-</span>
-<span title="Highway routing">
-  <Zap className="h-4 w-4 text-yellow-500" />
-</span>
-
+                    <Heart className="h-4 w-4 text-red-500" />
+                  </span>
+                  <span title="Advanced routing with toll gates">
+                    <Zap className="h-4 w-4 text-yellow-500" />
+                  </span>
                 </CardTitle>
               </CardHeader>
               <CardContent>
@@ -906,89 +1103,69 @@ export default function ManagePage() {
                       </div>
                     )}
                   </div>
-                  
-                  <div>
-                    <Label>Departure Point</Label>
-                    <div className="flex gap-2 mt-1">
-                      <Input
-                        value={tripForm.departure.name}
-                        placeholder="Select departure point"
-                        readOnly
-                        className="flex-1"
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => setShowLocationPicker({ type: "departure" })}
-                        className="btn-touch"
-                      >
-                        <MapPin className="h-4 w-4" />
-                      </Button>
+
+                  {/* Route Method Selection */}
+                  <div className="space-y-3">
+                    <Label>Route Method</Label>
+                    <div className="space-y-2">
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          checked={!useRouteTemplate}
+                          onChange={() => setUseRouteTemplate(false)}
+                          className="form-radio"
+                        />
+                        <span className="text-sm">🛣️ Custom Route (Manual)</span>
+                      </label>
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          checked={useRouteTemplate}
+                          onChange={() => setUseRouteTemplate(true)}
+                          className="form-radio"
+                        />
+                        <span className="text-sm">📋 Use Route Template</span>
+                      </label>
                     </div>
                   </div>
-                  
-                  <div>
-                    <Label>Stop Points (Optional)</Label>
-                    <div className="space-y-2 mt-1">
-                      {tripForm.stops.map((stop, index) => (
-                        <div key={index} className="flex items-center gap-2 p-2 bg-gray-50 rounded">
-                          <div className="flex-1 min-w-0">
-                            <div className="font-medium text-sm truncate">{stop.name}</div>
-                            <div className="flex items-center gap-2 mt-1">
-                              <Clock className="h-3 w-3 text-gray-400" />
-                              <input
-                                type="number"
-                                value={stop.duration}
-                                onChange={(e) => updateStopDuration(index, Number.parseInt(e.target.value) || 30)}
-                                className="w-16 px-1 py-0.5 text-xs border rounded"
-                                min="5"
-                                max="120"
-                              />
-                              <span className="text-xs text-gray-500">minutes</span>
-                            </div>
-                          </div>
-                          <Button 
-                            type="button" 
-                            variant="outline" 
-                            size="sm" 
-                            onClick={() => removeStop(index)}
-                            className="btn-touch"
-                          >
-                            Remove
-                          </Button>
+
+                  {useRouteTemplate ? (
+                    /* Route Template Selection */
+                    <div>
+                      <Label htmlFor="routeTemplate">Route Template</Label>
+                      <select
+                        id="routeTemplate"
+                        value={selectedRouteTemplate}
+                        onChange={(e) => setSelectedRouteTemplate(e.target.value)}
+                        className="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none"
+                        required
+                      >
+                        <option value="">Choose a route template...</option>
+                        {routeTemplates.map((template) => (
+                          <option key={template.id} value={template.id}>
+                            {template.name} ({template.code}) - {template.total_distance?.toFixed(1)}km
+                          </option>
+                        ))}
+                      </select>
+                      {routeTemplates.length === 0 && (
+                        <div className="flex items-center gap-2 mt-1 text-sm text-yellow-600">
+                          <AlertCircle className="h-4 w-4" />
+                          No route templates available. <Link href="/manage/routes" className="underline">Create one</Link>
                         </div>
-                      ))}
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => setShowLocationPicker({ type: "stop" })}
-                        className="w-full btn-touch"
-                      >
-                        <Plus className="h-4 w-4 mr-2" />
-                        Add Stop
-                      </Button>
+                      )}
                     </div>
-                  </div>
-                  
-                  <div>
-                    <Label>Final Destination</Label>
-                    <div className="flex gap-2 mt-1">
-                      <Input
-                        value={tripForm.destination.name}
-                        placeholder="Select destination"
-                        readOnly
-                        className="flex-1"
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => setShowLocationPicker({ type: "destination" })}
-                        className="btn-touch"
-                      >
-                        <MapPin className="h-4 w-4" />
-                      </Button>
+                  ) : (
+                    /* Custom Route Builder */
+                    <div>
+                      <Label>Custom Route Builder</Label>
+                      <div className="mt-2 border rounded-lg p-3">
+                        <RouteBuilder
+                          onSegmentsChange={setCustomSegments}
+                          initialSegments={customSegments}
+                        />
+                      </div>
                     </div>
-                  </div>
+                  )}
                   
                   <Button
                     type="submit"
@@ -996,14 +1173,14 @@ export default function ManagePage() {
                     disabled={
                       tripLoading ||
                       availableBuses.length === 0 ||
-                      !tripForm.departure.name ||
-                      !tripForm.destination.name
+                      (useRouteTemplate && !selectedRouteTemplate) ||
+                      (!useRouteTemplate && customSegments.length < 2)
                     }
                   >
                     {tripLoading ? (
                       <>
                         <Loading size="sm" />
-                        Creating Highway Route...
+                        Creating Advanced Route...
                       </>
                     ) : (
                       <>
@@ -1036,6 +1213,9 @@ export default function ManagePage() {
                 <div className="space-y-3 max-h-96 overflow-y-auto scrollbar-thin">
                   {trips.map((trip) => {
                     const bus = buses.find((b) => b.id === trip.bus_id)
+                    const routeTemplate = trip.route_template_id ? 
+                      routeTemplates.find(rt => rt.id === trip.route_template_id) : null
+                    
                     return (
                       <div key={trip.id} className="p-3 border rounded-lg animate-fadeIn">
                         <div className="flex items-center justify-between mb-2">
@@ -1094,6 +1274,12 @@ export default function ManagePage() {
                           </div>
                         </div>
                         <div className="text-sm text-gray-600 space-y-1">
+                          {routeTemplate && (
+                            <p className="flex items-center gap-2">
+                              <Router className="h-3 w-3 text-purple-600 flex-shrink-0" />
+                              <span className="truncate">Template: {routeTemplate.name} ({routeTemplate.code})</span>
+                            </p>
+                          )}
                           <p className="flex items-center gap-2">
                             <MapPin className="h-3 w-3 text-green-600 flex-shrink-0" />
                             <span className="truncate">From: {trip.departure.name}</span>
@@ -1102,10 +1288,22 @@ export default function ManagePage() {
                             <MapPin className="h-3 w-3 text-red-600 flex-shrink-0" />
                             <span className="truncate">To: {trip.destination.name}</span>
                           </p>
-                          {trip.stops.length > 0 && (
+                          {trip.segments && trip.segments.filter(s => s.type === 'stop').length > 0 && (
                             <p className="flex items-start gap-2">
                               <Clock className="h-3 w-3 text-gray-400 mt-0.5 flex-shrink-0" />
-                              <span className="text-xs">Stops: {trip.stops.map((stop) => stop.name).join(", ")}</span>
+                              <span className="text-xs">
+                                Stops: {trip.segments.filter(s => s.type === 'stop').map((stop) => 
+                                  `${stop.location.name} (${stop.stop_duration}m)`
+                                ).join(", ")}
+                              </span>
+                            </p>
+                          )}
+                          {trip.segments && trip.segments.filter(s => s.type === 'toll_entry').length > 0 && (
+                            <p className="flex items-start gap-2">
+                              <Zap className="h-3 w-3 text-blue-400 mt-0.5 flex-shrink-0" />
+                              <span className="text-xs">
+                                Toll Gates: {trip.segments.filter(s => s.type === 'toll_entry').length} entries
+                              </span>
                             </p>
                           )}
                           {trip.status === "PENDING" && (
@@ -1134,7 +1332,7 @@ export default function ManagePage() {
                                 <span>Speed: {trip.speed} km/h</span>
                                 <span className="flex items-center gap-1">
                                   <Zap className="h-3 w-3" />
-                                  Highway Route
+                                  Advanced Route
                                 </span>
                               </div>
                             </div>
@@ -1174,6 +1372,106 @@ export default function ManagePage() {
           </div>
         )}
       </div>
+
+      {/* Edit Bus Dialog */}
+      <Dialog open={showEditBusDialog} onOpenChange={setShowEditBusDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit Bus</DialogTitle>
+          </DialogHeader>
+          
+          <form onSubmit={handleUpdateBus} className="space-y-4 form-mobile">
+            <div>
+              <Label htmlFor="edit-code">Bus Code</Label>
+              <Input
+                id="edit-code"
+                value={editBusForm.code}
+                onChange={(e) => setEditBusForm((prev) => ({ ...prev, code: e.target.value }))}
+                placeholder="e.g., BUS001"
+                required
+              />
+            </div>
+            <div>
+              <Label htmlFor="edit-nickname">Bus Nickname</Label>
+              <Input
+                id="edit-nickname"
+                value={editBusForm.nickname}
+                onChange={(e) => setEditBusForm((prev) => ({ ...prev, nickname: e.target.value }))}
+                placeholder="e.g., Jakarta Express"
+                required
+              />
+            </div>
+            <div>
+              <Label htmlFor="edit-crew">Crew/Driver</Label>
+              <Input
+                id="edit-crew"
+                value={editBusForm.crew}
+                onChange={(e) => setEditBusForm((prev) => ({ ...prev, crew: e.target.value }))}
+                placeholder="e.g., Ahmad Supardi"
+                required
+              />
+            </div>
+            <div>
+              <Label htmlFor="edit-photo">Bus Photo</Label>
+              <div className="mt-2">
+                <input 
+                  id="edit-photo" 
+                  type="file" 
+                  accept="image/*" 
+                  onChange={handleEditPhotoChange} 
+                  className="hidden" 
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => document.getElementById("edit-photo")?.click()}
+                  className="w-full btn-touch"
+                >
+                  <Upload className="h-4 w-4 mr-2" />
+                  {editBusPhoto ? editBusPhoto.name : "Change Photo"}
+                </Button>
+              </div>
+              {editBusPhotoPreview && (
+                <div className="mt-2">
+                  <div className="relative w-full max-w-[200px] h-[150px] rounded-lg overflow-hidden bg-gray-100">
+                    <Image
+                      src={editBusPhotoPreview}
+                      alt="Bus preview"
+                      fill
+                      className="object-cover"
+                      unoptimized={true}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+            
+            <div className="flex gap-2 pt-4">
+              <Button type="submit" className="flex-1 btn-touch" disabled={busLoading}>
+                {busLoading ? (
+                  <>
+                    <Loading size="sm" />
+                    Updating...
+                  </>
+                ) : (
+                  <>
+                    <Edit2 className="h-4 w-4 mr-2" />
+                    Update Bus
+                  </>
+                )}
+              </Button>
+              <Button 
+                type="button"
+                variant="outline" 
+                onClick={() => setShowEditBusDialog(false)}
+                className="btn-touch"
+              >
+                Cancel
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       {/* Location Picker Modal */}
       {showLocationPicker && (
