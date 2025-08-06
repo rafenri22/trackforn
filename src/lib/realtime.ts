@@ -89,6 +89,39 @@ class RealtimeStore {
     this.busLocations = this.busLocations.filter((loc) => loc.bus_id !== busId)
     this.notify()
   }
+
+  // BARU: Method untuk refresh data tanpa reinitialize
+  async refreshDataOnly() {
+    console.log("🔄 RealtimeStore: Refreshing data without reinitializing...")
+    
+    try {
+      // Load fresh data dari database
+      const [busesResponse, tripsResponse, locationsResponse] = await Promise.all([
+        supabase.from("buses").select("*").order("created_at", { ascending: false }),
+        supabase.from("trips").select("*").order("created_at", { ascending: false }),
+        supabase.from("bus_locations").select("*").order("timestamp", { ascending: false }),
+      ])
+
+      // Update data tanpa mempengaruhi subscribers
+      if (busesResponse.data) this.buses = busesResponse.data
+      if (tripsResponse.data) this.trips = tripsResponse.data
+      if (locationsResponse.data) this.busLocations = locationsResponse.data
+
+      // Notify subscribers dengan data baru
+      this.notify()
+
+      console.log("✅ RealtimeStore: Data refreshed successfully:", {
+        buses: busesResponse.data?.length || 0,
+        trips: tripsResponse.data?.length || 0,
+        locations: locationsResponse.data?.length || 0,
+      })
+
+      return true
+    } catch (error) {
+      console.error("❌ RealtimeStore: Error refreshing data:", error)
+      throw error
+    }
+  }
 }
 
 // Global store instance

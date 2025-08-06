@@ -29,6 +29,10 @@ export default function HomePage() {
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [showRoute, setShowRoute] = useState(false)
+  
+  // BARU: State untuk preserve map view saat refresh
+  const [preserveMapView, setPreserveMapView] = useState(false)
+  
   const { toast } = useToast()
 
   // Real-time data synchronization dengan optimasi performa
@@ -55,6 +59,32 @@ export default function HomePage() {
     setLastUpdate(new Date().toLocaleTimeString())
     setIsOnline(true)
   }, [])
+
+  // MODIFIKASI: Refresh data saja tanpa reinitialize realtime sistem
+  const refreshDataOnly = useCallback(async () => {
+    console.log("🔄 Refreshing bus data only (preserving map view)...")
+    
+    try {
+      // Langsung sync data dari store yang sudah ada
+      syncRealTimeData()
+      
+      // Trigger store refresh jika diperlukan
+      const currentBuses = realtimeStore.getBuses()
+      const currentTrips = realtimeStore.getTrips()
+      const currentLocations = realtimeStore.getBusLocations()
+      
+      // Force update dengan data terbaru
+      setBuses([...currentBuses])
+      setTrips([...currentTrips])  
+      setBusLocations([...currentLocations])
+      
+      console.log("✅ Data refreshed successfully without map movement")
+      
+    } catch (error) {
+      console.error("❌ Error refreshing data:", error)
+      throw error
+    }
+  }, [syncRealTimeData])
 
   // Inisialisasi sistem real-time dengan performa enhanced
   useEffect(() => {
@@ -136,27 +166,51 @@ export default function HomePage() {
     setShowRoute(false)
   }, [])
 
+  // MODIFIKASI UTAMA: Handle refresh dengan preserve map view
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true)
+    setPreserveMapView(true) // Set flag untuk preserve map view
+    
     try {
-      console.log("🔄 Melakukan refresh data posisi bus...")
-      await initializeRealtime()
-      syncRealTimeData()
+      console.log("🔄 Melakukan refresh data posisi bus (preserving map view)...")
+      
+      // Hanya refresh data, jangan reinitialize sistem
+      await refreshDataOnly()
+      
       toast({
         title: "🔄 Posisi Bus Diperbarui",
-        description: "Data real-time berhasil disinkronisasi",
+        description: "Data real-time berhasil disinkronisasi (map view preserved)",
         variant: "success",
       })
     } catch (error) {
-      toast({
-        title: "❌ Gagal Refresh",
-        description: "Tidak dapat memperbarui data real-time",
-        variant: "destructive",
-      })
+      console.error("❌ Error during refresh:", error)
+      
+      // Jika refresh data gagal, baru coba reinitialize
+      try {
+        console.log("⚠️ Fallback to full reinitialize...")
+        await initializeRealtime()
+        syncRealTimeData()
+        
+        toast({
+          title: "🔄 Sistem Direstart",
+          description: "Koneksi real-time berhasil dipulihkan",
+          variant: "success",
+        })
+      } catch (fallbackError) {
+        toast({
+          title: "❌ Gagal Refresh",
+          description: "Tidak dapat memperbarui data real-time",
+          variant: "destructive",
+        })
+      }
     } finally {
       setIsRefreshing(false)
+      // Reset preserve flag setelah beberapa saat
+      setTimeout(() => {
+        setPreserveMapView(false)
+      }, 2000)
     }
-  }, [syncRealTimeData, toast])
+  }, [refreshDataOnly, toast])
 
   const handleBackToHome = useCallback(() => {
     window.location.href = "https://trijayaagunglestari.web.id"
@@ -281,14 +335,17 @@ export default function HomePage() {
               </Card>
             </div>
 
+            {/* MODIFIKASI: Button refresh dengan tooltip yang lebih jelas */}
             <Button 
               size="sm" 
               variant="outline" 
               onClick={handleRefresh} 
               disabled={isRefreshing}
               className="btn-touch"
+              title="Refresh data bus (map view tetap preserved)"
             >
               <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+              {isRefreshing && <span className="hidden sm:inline ml-1 text-xs">Refreshing...</span>}
             </Button>
 
             <Button
@@ -324,13 +381,15 @@ export default function HomePage() {
       </header>
 
       <main className="flex-1 relative overflow-hidden">
+        {/* MODIFIKASI: Pass preserveMapView prop ke BusMap */}
         <BusMap
           buses={buses}
           trips={activeTrips}
           busLocations={busLocations}
           onBusClick={handleBusClick}
           showControls={true}
-          autoFit={false}
+          autoFit={false} // Tetap false untuk mencegah auto-fit
+          preserveView={preserveMapView} // BARU: Props untuk preserve view
         />
 
         {lastUpdate && (
@@ -340,6 +399,9 @@ export default function HomePage() {
               <span className="hidden sm:inline">Last sync:</span>
               <span className="sm:hidden">Sync:</span>
               <span className="font-mono">{lastUpdate}</span>
+              {preserveMapView && (
+                <span className="text-green-600 text-[10px]">📍 View Preserved</span>
+              )}
             </div>
           </div>
         )}
