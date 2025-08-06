@@ -30,8 +30,8 @@ export default function HomePage() {
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [showRoute, setShowRoute] = useState(false)
   
-  // State untuk preserve map view saat refresh
-  const [preserveMapView, setPreserveMapView] = useState(true) // MODIFIED: Default to true to always preserve view
+  // FIXED: Always preserve map view - never reset to auto-fit
+  const [preserveMapView, setPreserveMapView] = useState(true)
   
   const { toast } = useToast()
 
@@ -60,25 +60,30 @@ export default function HomePage() {
     setIsOnline(true)
   }, [])
 
-  // Refresh data saja tanpa reinitialize realtime sistem
+  // FIXED: Enhanced refresh yang STRICT preserve map view
   const refreshDataOnly = useCallback(async () => {
-    console.log("🔄 Refreshing bus data only (preserving map view)...")
+    console.log("🔄 STRICT REFRESH: Refreshing bus data only - map view will be PRESERVED")
     
     try {
+      // CRITICAL: Set preserve view to true BEFORE any operations
+      setPreserveMapView(true)
+      
       // Langsung sync data dari store yang sudah ada
       syncRealTimeData()
       
       // Trigger store refresh jika diperlukan
+      await realtimeStore.refreshDataOnly()
+      
+      // Force update dengan data terbaru
       const currentBuses = realtimeStore.getBuses()
       const currentTrips = realtimeStore.getTrips()
       const currentLocations = realtimeStore.getBusLocations()
       
-      // Force update dengan data terbaru
       setBuses([...currentBuses])
-      setTrips([...currentTrips])  
+      setTrips([...currentTrips])
       setBusLocations([...currentLocations])
       
-      console.log("✅ Data refreshed successfully without map movement")
+      console.log("✅ STRICT REFRESH: Data refreshed successfully - map view PRESERVED")
       
     } catch (error) {
       console.error("❌ Error refreshing data:", error)
@@ -94,6 +99,9 @@ export default function HomePage() {
       try {
         setError(null)
         console.log("🚀 Menginisialisasi sistem real-time enhanced...")
+
+        // FIXED: Set preserve view immediately
+        setPreserveMapView(true)
 
         cleanup = await initializeRealtime()
 
@@ -166,20 +174,22 @@ export default function HomePage() {
     setShowRoute(false)
   }, [])
 
-  // Handle refresh dengan preserve map view
+  // FIXED: Enhanced refresh dengan ABSOLUTE map view preservation
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true)
-    setPreserveMapView(true) // MODIFIED: Ensure preserveMapView is true during refresh
     
     try {
-      console.log("🔄 Melakukan refresh data posisi bus (preserving map view)...")
+      console.log("🔄 ABSOLUTE REFRESH: Preserving exact map view position and zoom level")
+      
+      // CRITICAL: Ensure preserve view is true THROUGHOUT the refresh process
+      setPreserveMapView(true)
       
       // Hanya refresh data, jangan reinitialize sistem
       await refreshDataOnly()
       
       toast({
         title: "🔄 Posisi Bus Diperbarui",
-        description: "Data real-time berhasil disinkronisasi (map view preserved)",
+        description: "Data real-time berhasil disinkronisasi - map view completely preserved",
         variant: "success",
       })
     } catch (error) {
@@ -187,13 +197,14 @@ export default function HomePage() {
       
       // Jika refresh data gagal, baru coba reinitialize
       try {
-        console.log("⚠️ Fallback to full reinitialize...")
+        console.log("⚠️ Fallback to full reinitialize but still preserve view...")
+        setPreserveMapView(true) // CRITICAL: Keep preserving even during reinitialize
         await initializeRealtime()
         syncRealTimeData()
         
         toast({
           title: "🔄 Sistem Direstart",
-          description: "Koneksi real-time berhasil dipulihkan",
+          description: "Koneksi real-time berhasil dipulihkan - map view preserved",
           variant: "success",
         })
       } catch (fallbackError) {
@@ -205,10 +216,8 @@ export default function HomePage() {
       }
     } finally {
       setIsRefreshing(false)
-      // MODIFIED: Keep preserveMapView true to maintain view consistency
-      // setTimeout(() => {
-      //   setPreserveMapView(false)
-      // }, 2000)
+      // CRITICAL: NEVER disable preserve view after refresh
+      // setPreserveMapView will remain true forever to prevent any unwanted map movements
     }
   }, [refreshDataOnly, toast])
 
@@ -341,7 +350,7 @@ export default function HomePage() {
               onClick={handleRefresh} 
               disabled={isRefreshing}
               className="btn-touch"
-              title="Refresh data bus (map view tetap preserved)"
+              title="Refresh data bus - map view akan tetap preserved di posisi yang sama"
             >
               <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
               {isRefreshing && <span className="hidden sm:inline ml-1 text-xs">Refreshing...</span>}
@@ -387,7 +396,8 @@ export default function HomePage() {
           onBusClick={handleBusClick}
           showControls={true}
           autoFit={false}
-          preserveView={preserveMapView} // MODIFIED: Pass preserveMapView state
+          preserveView={preserveMapView}
+          strictPreserveView={true}
         />
 
         {lastUpdate && (
@@ -397,9 +407,7 @@ export default function HomePage() {
               <span className="hidden sm:inline">Last sync:</span>
               <span className="sm:hidden">Sync:</span>
               <span className="font-mono">{lastUpdate}</span>
-              {preserveMapView && (
-                <span className="text-green-600 text-[10px]">📍 View Preserved</span>
-              )}
+              <span className="text-green-600 text-[10px]"></span>
             </div>
           </div>
         )}
@@ -586,6 +594,8 @@ export default function HomePage() {
                                 trips={selectedBus.trip ? [selectedBus.trip] : []} 
                                 busLocations={[]}
                                 showControls={false}
+                                preserveView={false}
+                                strictPreserveView={false}
                               />
                             </div>
                           )}

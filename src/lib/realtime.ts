@@ -90,9 +90,9 @@ class RealtimeStore {
     this.notify()
   }
 
-  // Method untuk refresh data tanpa reinitialize
+  // FIXED: Enhanced refresh data tanpa trigger map changes
   async refreshDataOnly() {
-    console.log("🔄 RealtimeStore: Refreshing data without reinitializing...")
+    console.log("🔄 RealtimeStore: SILENT refresh - no map movement notifications")
     
     try {
       // Load fresh data dari database
@@ -102,23 +102,42 @@ class RealtimeStore {
         supabase.from("bus_locations").select("*").order("timestamp", { ascending: false }),
       ])
 
-      // Update data tanpa mempengaruhi subscribers
-      if (busesResponse.data) this.buses = busesResponse.data
-      if (tripsResponse.data) this.trips = tripsResponse.data
-      if (locationsResponse.data) this.busLocations = locationsResponse.data
+      // CRITICAL: Update data silently tanpa trigger excessive notifications
+      let hasChanges = false
+      
+      if (busesResponse.data && JSON.stringify(this.buses) !== JSON.stringify(busesResponse.data)) {
+        this.buses = busesResponse.data
+        hasChanges = true
+      }
+      
+      if (tripsResponse.data && JSON.stringify(this.trips) !== JSON.stringify(tripsResponse.data)) {
+        this.trips = tripsResponse.data
+        hasChanges = true
+      }
+      
+      if (locationsResponse.data && JSON.stringify(this.busLocations) !== JSON.stringify(locationsResponse.data)) {
+        this.busLocations = locationsResponse.data
+        hasChanges = true
+      }
 
-      // Notify subscribers dengan data baru
-      this.notify()
+      // Only notify if there are actual changes
+      if (hasChanges) {
+        console.log("✅ RealtimeStore: Data changes detected, notifying subscribers")
+        this.notify()
+      } else {
+        console.log("✅ RealtimeStore: No data changes detected, preserving current state")
+      }
 
-      console.log("✅ RealtimeStore: Data refreshed successfully:", {
+      console.log("✅ RealtimeStore: Silent refresh completed:", {
         buses: busesResponse.data?.length || 0,
         trips: tripsResponse.data?.length || 0,
         locations: locationsResponse.data?.length || 0,
+        hasChanges
       })
 
       return true
     } catch (error) {
-      console.error("❌ RealtimeStore: Error refreshing data:", error)
+      console.error("❌ RealtimeStore: Error in silent refresh:", error)
       throw error
     }
   }
