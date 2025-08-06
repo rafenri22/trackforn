@@ -25,7 +25,7 @@ interface BusMapProps {
   showControls?: boolean
   autoFit?: boolean
   activeTripId?: string
-  preserveView?: boolean // BARU: Props untuk preserve map view
+  preserveView?: boolean // Props untuk preserve map view
 }
 
 const formatElapsedTime = (minutes: number): string => {
@@ -60,7 +60,7 @@ function BusMap({
   showControls = false,
   autoFit = false,
   activeTripId,
-  preserveView = false, // BARU: Default false
+  preserveView = false, // MODIFIED: Default false, controlled by parent
 }: BusMapProps) {
   const mapRef = useRef<HTMLDivElement>(null)
   const mapInstanceRef = useRef<L.Map | null>(null)
@@ -69,16 +69,17 @@ function BusMap({
   const initializedRef = useRef(false)
   const [activeRouteTripId, setActiveRouteTripId] = useState<string | null>(null)
   
-  // MODIFIKASI: Enhanced user interaction tracking dengan preserve view support
+  // ENHANCED: Strict user interaction tracking dengan better preserve view support
   const [hasUserInteracted, setHasUserInteracted] = useState(false)
   const [isUserCurrentlyInteracting, setIsUserCurrentlyInteracting] = useState(false)
   const userInteractionTimer = useRef<number | null>(null)
   const initialAutoFitDone = useRef(false)
   
-  // BARU: State untuk menyimpan map view saat preserve mode
+  // ENHANCED: Better map view preservation dengan automatic saving
   const savedMapView = useRef<{
     center: [number, number]
     zoom: number
+    timestamp: number
   } | null>(null)
 
   const handleBusClick = useCallback((bus: Bus, trip?: Trip) => {
@@ -89,21 +90,22 @@ function BusMap({
     }
   }, [activeRouteTripId])
 
-  // MODIFIKASI: Enhanced user interaction tracking dengan preserve view
+  // ENHANCED: Better user interaction tracking dengan automatic view saving
   const handleUserInteraction = useCallback((interactionType: string) => {
     console.log(`🗺️ User interaction detected: ${interactionType}`)
     setHasUserInteracted(true)
     setIsUserCurrentlyInteracting(true)
     
-    // BARU: Simpan view saat user berinteraksi
-    if (mapInstanceRef.current && !preserveView) {
+    // ENHANCED: ALWAYS save current view saat user berinteraksi
+    if (mapInstanceRef.current) {
       const center = mapInstanceRef.current.getCenter()
       const zoom = mapInstanceRef.current.getZoom()
       savedMapView.current = {
         center: [center.lat, center.lng],
-        zoom
+        zoom,
+        timestamp: Date.now()
       }
-      console.log(`💾 Saved map view: center [${center.lat.toFixed(4)}, ${center.lng.toFixed(4)}], zoom ${zoom}`)
+      console.log(`💾 SAVED map view: center [${center.lat.toFixed(4)}, ${center.lng.toFixed(4)}], zoom ${zoom}`)
     }
     
     if (userInteractionTimer.current) {
@@ -114,21 +116,36 @@ function BusMap({
       userInteractionTimer.current = window.setTimeout(() => {
         setIsUserCurrentlyInteracting(false)
         console.log('🗺️ User interaction timeout - allowing gentle updates')
-      }, 5000) // 5 seconds of no interaction before allowing updates
+      }, 8000) // 8 seconds lebih lama
     }
-  }, [preserveView])
+  }, [])
 
-  // BARU: Function untuk restore map view
+  // ENHANCED: Restore map view dengan better validation
   const restoreMapView = useCallback(() => {
     if (mapInstanceRef.current && savedMapView.current) {
-      const { center, zoom } = savedMapView.current
-      console.log(`🔄 Restoring map view: center [${center[0].toFixed(4)}, ${center[1].toFixed(4)}], zoom ${zoom}`)
+      const { center, zoom, timestamp } = savedMapView.current
       
-      mapInstanceRef.current.setView(center, zoom, {
-        animate: false // No animation for instant restore
-      })
+      // Validate saved view is not too old (max 1 minute old)
+      const now = Date.now()
+      if (now - timestamp > 60000) {
+        console.log(`🗺️ Saved view too old (${Math.floor((now - timestamp) / 1000)}s), not restoring`)
+        return false
+      }
       
-      return true
+      console.log(`🔄 RESTORING map view: center [${center[0].toFixed(4)}, ${center[1].toFixed(4)}], zoom ${zoom}`)
+      
+      try {
+        mapInstanceRef.current.setView(center, zoom, {
+          animate: false, // No animation for instant restore
+          duration: 0
+        })
+        
+        console.log(`✅ Map view restored successfully`)
+        return true
+      } catch (error) {
+        console.error(`❌ Error restoring map view:`, error)
+        return false
+      }
     }
     return false
   }, [])
@@ -189,7 +206,7 @@ function BusMap({
 
     mapInstanceRef.current = map
 
-    // Enhanced interaction tracking untuk semua map movements
+    // ENHANCED: Better interaction tracking untuk ALL map movements
     const interactionEvents = [
       'dragstart', 'drag', 'dragend',
       'zoomstart', 'zoom', 'zoomend', 
@@ -215,7 +232,7 @@ function BusMap({
     map.on('click', handleMapClick)
 
     initializedRef.current = true
-    console.log('🗺️ Map initialized - tracking user interactions with preserve view support')
+    console.log('🗺️ Map initialized - STRICT view preservation enabled')
 
     return () => {
       map.off('click', handleMapClick)
@@ -282,21 +299,35 @@ function BusMap({
     }
   }, [activeTripId, activeRouteTripId, trips])
 
-  // MODIFIKASI UTAMA: Effect untuk manage bus markers dengan preserve view support
+  // ENHANCED: Main effect untuk manage bus markers dengan STRICT preserve view
   useEffect(() => {
     if (!mapInstanceRef.current || !initializedRef.current) return
 
     const map = mapInstanceRef.current
     const markers = markersRef.current
 
-    console.log(`🗺️ Updating bus markers - User interacted: ${hasUserInteracted}, Currently interacting: ${isUserCurrentlyInteracting}, Preserve view: ${preserveView}`)
+    console.log(`🗺️ Updating bus markers - Preserve: ${preserveView}, User interacted: ${hasUserInteracted}, Currently interacting: ${isUserCurrentlyInteracting}`)
 
-    // BARU: Restore map view jika dalam preserve mode
-    if (preserveView && hasUserInteracted) {
+    // CRITICAL: ALWAYS restore view jika preserve mode active ATAU user sudah interact
+    if ((preserveView || hasUserInteracted) && savedMapView.current) {
       const restored = restoreMapView()
       if (restored) {
-        console.log('📍 Map view restored successfully during preserve mode')
+        console.log('📍 Map view RESTORED during preserve/interaction mode')
+      } else {
+        console.log('⚠️ Map view restore failed or view too old')
       }
+    }
+
+    // MODIFIED: Save current view jika belum ada saved view atau dalam preserve mode
+    if (preserveView && !savedMapView.current && mapInstanceRef.current) {
+      const center = mapInstanceRef.current.getCenter()
+      const zoom = mapInstanceRef.current.getZoom()
+      savedMapView.current = {
+        center: [center.lat, center.lng],
+        zoom,
+        timestamp: Date.now()
+      }
+      console.log(`💾 SAVED current map view due to preserveView: center [${center.lat.toFixed(4)}, ${center.lng.toFixed(4)}], zoom ${zoom}`)
     }
 
     // Clear existing markers
@@ -573,18 +604,18 @@ function BusMap({
       })
     }
 
-    // MODIFIKASI: Smart auto-fit logic dengan preserve view support
+    // MODIFIED: Enhanced auto-fit logic to respect preserveView
     const shouldAutoFit = autoFit && 
-                           visibleBusLocations.length > 0 && 
-                           !activeRouteTripId && 
-                           !activeTripId && 
-                           !hasUserInteracted && 
-                           !isUserCurrentlyInteracting &&
-                           !initialAutoFitDone.current &&
-                           !preserveView // BARU: Tidak auto-fit jika dalam preserve mode
+                         visibleBusLocations.length > 0 && 
+                         !activeRouteTripId && 
+                         !activeTripId && 
+                         !hasUserInteracted && 
+                         !isUserCurrentlyInteracting &&
+                         !initialAutoFitDone.current &&
+                         !preserveView // CRITICAL: NO auto-fit jika preserve mode
 
     if (shouldAutoFit) {
-      console.log('🗺️ Performing initial auto-fit to show all buses')
+      console.log('🗺️ Performing INITIAL auto-fit to show all buses')
       const activeMarkers = Array.from(markers.values()).filter((_, index) => index < visibleBusLocations.length)
       if (activeMarkers.length > 0) {
         const group = new L.FeatureGroup(activeMarkers)
@@ -592,9 +623,10 @@ function BusMap({
         initialAutoFitDone.current = true
       }
     } else if (preserveView) {
-      console.log('🗺️ Preserve view mode - skipping auto-fit and maintaining current view')
+      console.log('🗺️ PRESERVE VIEW mode - STRICTLY maintaining current view, NO map changes allowed')
+      restoreMapView() // MODIFIED: Ensure view is restored during preserve mode
     } else if (hasUserInteracted || isUserCurrentlyInteracting) {
-      console.log('🗺️ Skipping auto-fit - user has interacted with map')
+      console.log('🗺️ STRICT preservation - user has interacted with map, NO auto changes')
     }
 
     // Global functions for popup buttons - add window checks
@@ -634,8 +666,8 @@ function BusMap({
     activeTripId, 
     hasUserInteracted, 
     isUserCurrentlyInteracting,
-    preserveView, // BARU: Tambahkan dalam dependency
-    restoreMapView // BARU: Tambahkan dalam dependency
+    preserveView, // CRITICAL: Include dalam dependency dengan strict check
+    restoreMapView // Include restore function
   ])
 
   return <div ref={mapRef} className="w-full h-full" style={{ minHeight: "400px" }} />

@@ -90,7 +90,7 @@ class RealtimeStore {
     this.notify()
   }
 
-  // BARU: Method untuk refresh data tanpa reinitialize
+  // Method untuk refresh data tanpa reinitialize
   async refreshDataOnly() {
     console.log("🔄 RealtimeStore: Refreshing data without reinitializing...")
     

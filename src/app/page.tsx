@@ -30,8 +30,8 @@ export default function HomePage() {
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [showRoute, setShowRoute] = useState(false)
   
-  // BARU: State untuk preserve map view saat refresh
-  const [preserveMapView, setPreserveMapView] = useState(false)
+  // State untuk preserve map view saat refresh
+  const [preserveMapView, setPreserveMapView] = useState(true) // MODIFIED: Default to true to always preserve view
   
   const { toast } = useToast()
 
@@ -60,7 +60,7 @@ export default function HomePage() {
     setIsOnline(true)
   }, [])
 
-  // MODIFIKASI: Refresh data saja tanpa reinitialize realtime sistem
+  // Refresh data saja tanpa reinitialize realtime sistem
   const refreshDataOnly = useCallback(async () => {
     console.log("🔄 Refreshing bus data only (preserving map view)...")
     
@@ -166,10 +166,10 @@ export default function HomePage() {
     setShowRoute(false)
   }, [])
 
-  // MODIFIKASI UTAMA: Handle refresh dengan preserve map view
+  // Handle refresh dengan preserve map view
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true)
-    setPreserveMapView(true) // Set flag untuk preserve map view
+    setPreserveMapView(true) // MODIFIED: Ensure preserveMapView is true during refresh
     
     try {
       console.log("🔄 Melakukan refresh data posisi bus (preserving map view)...")
@@ -205,10 +205,10 @@ export default function HomePage() {
       }
     } finally {
       setIsRefreshing(false)
-      // Reset preserve flag setelah beberapa saat
-      setTimeout(() => {
-        setPreserveMapView(false)
-      }, 2000)
+      // MODIFIED: Keep preserveMapView true to maintain view consistency
+      // setTimeout(() => {
+      //   setPreserveMapView(false)
+      // }, 2000)
     }
   }, [refreshDataOnly, toast])
 
@@ -335,7 +335,6 @@ export default function HomePage() {
               </Card>
             </div>
 
-            {/* MODIFIKASI: Button refresh dengan tooltip yang lebih jelas */}
             <Button 
               size="sm" 
               variant="outline" 
@@ -381,15 +380,14 @@ export default function HomePage() {
       </header>
 
       <main className="flex-1 relative overflow-hidden">
-        {/* MODIFIKASI: Pass preserveMapView prop ke BusMap */}
         <BusMap
           buses={buses}
           trips={activeTrips}
           busLocations={busLocations}
           onBusClick={handleBusClick}
           showControls={true}
-          autoFit={false} // Tetap false untuk mencegah auto-fit
-          preserveView={preserveMapView} // BARU: Props untuk preserve view
+          autoFit={false}
+          preserveView={preserveMapView} // MODIFIED: Pass preserveMapView state
         />
 
         {lastUpdate && (
