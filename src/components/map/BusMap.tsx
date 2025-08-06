@@ -66,8 +66,12 @@ function BusMap({
   const activeRoutePolyline = useRef<L.Polyline | null>(null)
   const initializedRef = useRef(false)
   const [activeRouteTripId, setActiveRouteTripId] = useState<string | null>(null)
-  const [isUserInteracting, setIsUserInteracting] = useState(false)
+  
+  // FIXED: Enhanced user interaction tracking to prevent map movement during updates
+  const [hasUserInteracted, setHasUserInteracted] = useState(false)
+  const [isUserCurrentlyInteracting, setIsUserCurrentlyInteracting] = useState(false)
   const userInteractionTimer = useRef<number | null>(null)
+  const initialAutoFitDone = useRef(false)
 
   const handleBusClick = useCallback((bus: Bus, trip?: Trip) => {
     if (trip?.id && activeRouteTripId !== trip.id) {
@@ -77,23 +81,26 @@ function BusMap({
     }
   }, [activeRouteTripId])
 
-  // Track user interaction to prevent auto-fitting during manual map control
-  const handleUserInteraction = useCallback(() => {
-    setIsUserInteracting(true)
+  // FIXED: Enhanced user interaction tracking
+  const handleUserInteraction = useCallback((interactionType: string) => {
+    console.log(`🗺️ User interaction detected: ${interactionType}`)
+    setHasUserInteracted(true)
+    setIsUserCurrentlyInteracting(true)
+    
     if (userInteractionTimer.current) {
       clearTimeout(userInteractionTimer.current)
     }
-    // FIXED: Add window check
+    
     if (typeof window !== 'undefined') {
       userInteractionTimer.current = window.setTimeout(() => {
-        setIsUserInteracting(false)
-      }, 3000) // Reset after 3 seconds of no interaction
+        setIsUserCurrentlyInteracting(false)
+        console.log('🗺️ User interaction timeout - allowing gentle updates')
+      }, 5000) // 5 seconds of no interaction before allowing updates
     }
   }, [])
 
   // Initialize map and event handlers
   useEffect(() => {
-    // FIXED: Add window check
     if (typeof window === 'undefined' || !mapRef.current || mapInstanceRef.current) return
 
     const javaCenter = [-7.5, 110.0]
@@ -148,10 +155,17 @@ function BusMap({
 
     mapInstanceRef.current = map
 
-    // Handle map interactions to track user activity
-    map.on('dragstart', handleUserInteraction)
-    map.on('zoomstart', handleUserInteraction)
-    map.on('movestart', handleUserInteraction)
+    // FIXED: Enhanced interaction tracking for all map movements
+    const interactionEvents = [
+      'dragstart', 'drag', 'dragend',
+      'zoomstart', 'zoom', 'zoomend', 
+      'movestart', 'move', 'moveend',
+      'resize', 'viewreset'
+    ]
+
+    interactionEvents.forEach(eventName => {
+      map.on(eventName, () => handleUserInteraction(eventName))
+    })
 
     // Handle map click to clear route
     const handleMapClick = (e: L.LeafletMouseEvent) => {
@@ -167,12 +181,15 @@ function BusMap({
     map.on('click', handleMapClick)
 
     initializedRef.current = true
+    console.log('🗺️ Map initialized - tracking user interactions')
 
     return () => {
       map.off('click', handleMapClick)
-      map.off('dragstart', handleUserInteraction)
-      map.off('zoomstart', handleUserInteraction)
-      map.off('movestart', handleUserInteraction)
+      
+      interactionEvents.forEach(eventName => {
+        map.off(eventName)
+      })
+      
       if (userInteractionTimer.current) {
         clearTimeout(userInteractionTimer.current)
       }
@@ -180,6 +197,9 @@ function BusMap({
         mapInstanceRef.current.remove()
         mapInstanceRef.current = null
         initializedRef.current = false
+        initialAutoFitDone.current = false
+        setHasUserInteracted(false)
+        setIsUserCurrentlyInteracting(false)
       }
     }
   }, [handleUserInteraction, buses, busLocations])
@@ -227,12 +247,14 @@ function BusMap({
     }
   }, [activeTripId, activeRouteTripId, trips])
 
-  // Effect to manage bus markers
+  // FIXED: Effect to manage bus markers with smart auto-fit
   useEffect(() => {
     if (!mapInstanceRef.current || !initializedRef.current) return
 
     const map = mapInstanceRef.current
     const markers = markersRef.current
+
+    console.log(`🗺️ Updating bus markers - User interacted: ${hasUserInteracted}, Currently interacting: ${isUserCurrentlyInteracting}`)
 
     // Clear existing markers
     markers.forEach((marker) => map.removeLayer(marker))
@@ -508,13 +530,25 @@ function BusMap({
       })
     }
 
-    // Auto-fit bounds only if requested and not during user interaction
-    if (autoFit && visibleBusLocations.length > 0 && !activeRouteTripId && !activeTripId && !isUserInteracting) {
+    // FIXED: Smart auto-fit logic - only on initial load and if explicitly requested
+    const shouldAutoFit = autoFit && 
+                           visibleBusLocations.length > 0 && 
+                           !activeRouteTripId && 
+                           !activeTripId && 
+                           !hasUserInteracted && 
+                           !isUserCurrentlyInteracting &&
+                           !initialAutoFitDone.current
+
+    if (shouldAutoFit) {
+      console.log('🗺️ Performing initial auto-fit to show all buses')
       const activeMarkers = Array.from(markers.values()).filter((_, index) => index < visibleBusLocations.length)
       if (activeMarkers.length > 0) {
         const group = new L.FeatureGroup(activeMarkers)
         map.fitBounds(group.getBounds().pad(0.1))
+        initialAutoFitDone.current = true
       }
+    } else if (hasUserInteracted || isUserCurrentlyInteracting) {
+      console.log('🗺️ Skipping auto-fit - user has interacted with map')
     }
 
     // FIXED: Global functions for popup buttons - add window checks
@@ -542,7 +576,19 @@ function BusMap({
         }
       };
     }
-  }, [busLocations, trips, buses, onBusClick, showControls, autoFit, handleBusClick, activeRouteTripId, activeTripId, isUserInteracting])
+  }, [
+    busLocations, 
+    trips, 
+    buses, 
+    onBusClick, 
+    showControls, 
+    autoFit, 
+    handleBusClick, 
+    activeRouteTripId, 
+    activeTripId, 
+    hasUserInteracted, 
+    isUserCurrentlyInteracting
+  ])
 
   return <div ref={mapRef} className="w-full h-full" style={{ minHeight: "400px" }} />
 }
