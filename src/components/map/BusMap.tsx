@@ -8,12 +8,14 @@ import { GARAGE_LOCATION } from "@/lib/tracking"
 import React from "react"
 
 // Fix for default markers
-delete (L.Icon.Default.prototype as unknown as { _getIconUrl?: unknown })._getIconUrl
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png",
-  iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png",
-  shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png",
-})
+if (typeof window !== 'undefined') {
+  delete (L.Icon.Default.prototype as unknown as { _getIconUrl?: unknown })._getIconUrl
+  L.Icon.Default.mergeOptions({
+    iconRetinaUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png",
+    iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png",
+    shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png",
+  })
+}
 
 interface BusMapProps {
   buses: Bus[]
@@ -81,14 +83,18 @@ function BusMap({
     if (userInteractionTimer.current) {
       clearTimeout(userInteractionTimer.current)
     }
-    userInteractionTimer.current = window.setTimeout(() => {
-      setIsUserInteracting(false)
-    }, 3000)     // Reset after 3 seconds of no interaction
+    // FIXED: Add window check
+    if (typeof window !== 'undefined') {
+      userInteractionTimer.current = window.setTimeout(() => {
+        setIsUserInteracting(false)
+      }, 3000) // Reset after 3 seconds of no interaction
+    }
   }, [])
 
   // Initialize map and event handlers
   useEffect(() => {
-    if (!mapRef.current || mapInstanceRef.current) return
+    // FIXED: Add window check
+    if (typeof window === 'undefined' || !mapRef.current || mapInstanceRef.current) return
 
     const javaCenter = [-7.5, 110.0]
     const map = L.map(mapRef.current, {
@@ -176,7 +182,7 @@ function BusMap({
         initializedRef.current = false
       }
     }
-  }, [handleUserInteraction])
+  }, [handleUserInteraction, buses, busLocations])
 
   // Effect to manage active route polyline - IMPROVED with real route display
   useEffect(() => {
@@ -357,11 +363,11 @@ function BusMap({
             showControls
               ? `
             <div class="mt-3 pt-2 border-t">
-              <button onclick="window.showBusDetails('${bus.id}', '${trip?.id || ''}')" class="w-full bg-blue-600 text-white px-3 py-2 rounded text-sm hover:bg-blue-700 mb-2">
+              <button onclick="window.showBusDetails && window.showBusDetails('${bus.id}', '${trip?.id || ''}')" class="w-full bg-blue-600 text-white px-3 py-2 rounded text-sm hover:bg-blue-700 mb-2">
                 View Details
               </button>
               ${trip && isActive ? `
-                <button onclick="window.toggleRoute('${trip.id}')" class="w-full bg-green-600 text-white px-3 py-2 rounded text-sm hover:bg-green-700">
+                <button onclick="window.toggleRoute && window.toggleRoute('${trip.id}')" class="w-full bg-green-600 text-white px-3 py-2 rounded text-sm hover:bg-green-700">
                   ${activeRouteTripId === trip.id ? 'Hide Route' : 'Show Real Route'}
                 </button>
               ` : ''}
@@ -464,7 +470,7 @@ function BusMap({
                 showControls
                   ? `
                 <div class="mt-3 pt-2 border-t">
-                  <button onclick="window.showParkedBusDetails('${bus.id}')" class="w-full bg-gray-600 text-white px-3 py-2 rounded text-sm hover:bg-gray-700">
+                  <button onclick="window.showParkedBusDetails && window.showParkedBusDetails('${bus.id}')" class="w-full bg-gray-600 text-white px-3 py-2 rounded text-sm hover:bg-gray-700">
                     View Details
                   </button>
                 </div>
@@ -511,33 +517,30 @@ function BusMap({
       }
     }
 
-    // Global functions for popup buttons
-    if (showControls) {
-      (window as unknown as { showBusDetails: (busId: string, tripId: string) => void }).showBusDetails = (
-        busId: string,
-        tripId: string,
-      ) => {
+    // FIXED: Global functions for popup buttons - add window checks
+    if (showControls && typeof window !== 'undefined') {
+      (window as any).showBusDetails = (busId: string, tripId: string) => {
         const bus = buses.find((b) => b.id === busId)
         const trip = tripId ? trips.find((t) => t.id === tripId) : undefined
         if (bus && onBusClick) {
           onBusClick(bus, trip)
         }
-      }
-      (window as unknown as { showParkedBusDetails: (busId: string) => void }).showParkedBusDetails = (
-        busId: string,
-      ) => {
+      };
+      
+      (window as any).showParkedBusDetails = (busId: string) => {
         const bus = buses.find((b) => b.id === busId)
         if (bus && onBusClick) {
           onBusClick(bus)
         }
-      }
-      (window as unknown as { toggleRoute: (tripId: string) => void }).toggleRoute = (tripId: string) => {
+      };
+      
+      (window as any).toggleRoute = (tripId: string) => {
         if (activeRouteTripId === tripId) {
           setActiveRouteTripId(null)
         } else {
           setActiveRouteTripId(tripId)
         }
-      }
+      };
     }
   }, [busLocations, trips, buses, onBusClick, showControls, autoFit, handleBusClick, activeRouteTripId, activeTripId, isUserInteracting])
 

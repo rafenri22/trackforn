@@ -410,6 +410,15 @@ export default function RouteBuilder({ onSegmentsChange, onRouteDataChange, init
     }
   }
 
+  // FIXED: Generate unique ID for crypto.randomUUID fallback
+  const generateId = useCallback(() => {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+      return crypto.randomUUID()
+    }
+    // Fallback for environments without crypto.randomUUID
+    return Math.random().toString(36).substr(2, 9) + Date.now().toString(36)
+  }, [])
+
   // Check route status
   const hasRealDeparture = segments.some(s => s.type === 'departure')
   const hasRealDestination = segments.some(s => s.type === 'destination')

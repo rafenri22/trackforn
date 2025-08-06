@@ -12,8 +12,14 @@ import { useToast } from "@/hooks/use-toast"
 import { ArrowLeft, Plus, Navigation, Edit2, Trash2, Eye, Copy } from 'lucide-react'
 import Link from "next/link"
 import type { RouteTemplate, RouteSegment, CreateRouteTemplateRequest } from "@/types"
-import RouteBuilder from "@/components/map/RouteBuilder"
+import dynamic from "next/dynamic"
 import { calculateRouteFromSegments } from "@/lib/routing"
+
+// FIXED: Dynamic imports with proper SSR handling
+const RouteBuilder = dynamic(() => import("@/components/map/RouteBuilder"), {
+  ssr: false,
+  loading: () => <Loading text="Loading route builder..." />
+})
 
 export default function RoutesPage() {
   const [routes, setRoutes] = useState<RouteTemplate[]>([])
