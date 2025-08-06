@@ -64,14 +64,27 @@ function BusMap({
   const activeRoutePolyline = useRef<L.Polyline | null>(null)
   const initializedRef = useRef(false)
   const [activeRouteTripId, setActiveRouteTripId] = useState<string | null>(null)
-  const [selectedBus, setSelectedBus] = useState<{ bus: Bus; trip?: Trip } | null>(null)
+  const [isUserInteracting, setIsUserInteracting] = useState(false)
+  const userInteractionTimer = useRef<number | null>(null)
 
   const handleBusClick = useCallback((bus: Bus, trip?: Trip) => {
-    setSelectedBus({ bus, trip })
     if (trip?.id && activeRouteTripId !== trip.id) {
       setActiveRouteTripId(trip.id)
+    } else if (trip?.id && activeRouteTripId === trip.id) {
+      setActiveRouteTripId(null) // Toggle off if same trip
     }
   }, [activeRouteTripId])
+
+  // Track user interaction to prevent auto-fitting during manual map control
+  const handleUserInteraction = useCallback(() => {
+    setIsUserInteracting(true)
+    if (userInteractionTimer.current) {
+      clearTimeout(userInteractionTimer.current)
+    }
+    userInteractionTimer.current = window.setTimeout(() => {
+      setIsUserInteracting(false)
+    }, 3000)     // Reset after 3 seconds of no interaction
+  }, [])
 
   // Initialize map and event handlers
   useEffect(() => {
@@ -128,29 +141,44 @@ function BusMap({
       .addTo(map)
 
     mapInstanceRef.current = map
-    initializedRef.current = true
+
+    // Handle map interactions to track user activity
+    map.on('dragstart', handleUserInteraction)
+    map.on('zoomstart', handleUserInteraction)
+    map.on('movestart', handleUserInteraction)
 
     // Handle map click to clear route
-    const handleMapClick = () => {
-      setActiveRouteTripId(null)
-      if (activeRoutePolyline.current) {
-        map.removeLayer(activeRoutePolyline.current)
-        activeRoutePolyline.current = null
+    const handleMapClick = (e: L.LeafletMouseEvent) => {
+      // Only clear route if not clicking on a marker
+      if (e.originalEvent.target === map.getContainer()) {
+        setActiveRouteTripId(null)
+        if (activeRoutePolyline.current) {
+          map.removeLayer(activeRoutePolyline.current)
+          activeRoutePolyline.current = null
+        }
       }
     }
     map.on('click', handleMapClick)
 
+    initializedRef.current = true
+
     return () => {
       map.off('click', handleMapClick)
+      map.off('dragstart', handleUserInteraction)
+      map.off('zoomstart', handleUserInteraction)
+      map.off('movestart', handleUserInteraction)
+      if (userInteractionTimer.current) {
+        clearTimeout(userInteractionTimer.current)
+      }
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove()
         mapInstanceRef.current = null
         initializedRef.current = false
       }
     }
-  }, [])
+  }, [handleUserInteraction])
 
-  // Effect to manage active route polyline
+  // Effect to manage active route polyline - FIXED: No auto-fitting when showing route
   useEffect(() => {
     if (!mapInstanceRef.current || !initializedRef.current) return
     const map = mapInstanceRef.current
@@ -181,11 +209,12 @@ function BusMap({
             opacity: 0.7
           }).addTo(map)
 
-          map.fitBounds(activeRoutePolyline.current.getBounds())
+          // DON'T auto-fit bounds - let user control the map manually
+          // map.fitBounds(activeRoutePolyline.current.getBounds())
         }
       }
     }
-  }, [activeTripId, activeRouteTripId, trips])
+  }, [activeTripId, activeRouteTripId, trips]) // Removed isUserInteracting dependency
 
   // Effect to manage bus markers
   useEffect(() => {
@@ -268,7 +297,7 @@ function BusMap({
       })
 
       let popupContent = `
-        <div class="p-3 min-w-[250px]">
+        <div class="p-3 min-w-[250px]" onclick="event.stopPropagation()">
           <div class="flex items-center gap-3 mb-3">
             ${
               bus.photo_url
@@ -318,9 +347,14 @@ function BusMap({
             showControls
               ? `
             <div class="mt-3 pt-2 border-t">
-              <button onclick="window.showBusDetails('${bus.id}', '${trip?.id || ''}')" class="w-full bg-blue-600 text-white px-3 py-2 rounded text-sm hover:bg-blue-700">
+              <button onclick="window.showBusDetails('${bus.id}', '${trip?.id || ''}')" class="w-full bg-blue-600 text-white px-3 py-2 rounded text-sm hover:bg-blue-700 mb-2">
                 View Details
               </button>
+              ${trip && isActive ? `
+                <button onclick="window.toggleRoute('${trip.id}')" class="w-full bg-green-600 text-white px-3 py-2 rounded text-sm hover:bg-green-700">
+                  ${activeRouteTripId === trip.id ? 'Hide Route' : 'Show Route'}
+                </button>
+              ` : ''}
             </div>
           `
               : ""
@@ -329,22 +363,31 @@ function BusMap({
       `
 
       const marker = L.marker([location.lat, location.lng], { icon: busIcon })
-        .bindPopup(popupContent)
+        .bindPopup(popupContent, {
+          closeOnClick: false,
+          autoClose: false,
+          closeButton: true,
+          maxWidth: 300,
+          keepInView: true
+        })
         .addTo(map)
 
-      // Prevent event propagation for marker and popup
+      // Prevent event propagation for marker clicks
       marker.on("click", (e) => {
         L.DomEvent.stopPropagation(e)
         if (onBusClick) {
           handleBusClick(bus, trip)
+          onBusClick(bus, trip)
         }
       })
 
-      // Prevent popup from closing when clicking inside
+      // Keep popup open and prevent auto-closing
       marker.on('popupopen', (e) => {
         const popup = e.popup.getElement()
         if (popup) {
-          popup.addEventListener('click', L.DomEvent.stopPropagation)
+          popup.addEventListener('click', (event) => {
+            event.stopPropagation()
+          })
         }
       })
 
@@ -379,7 +422,7 @@ function BusMap({
 
         const parkedMarker = L.marker([position.lat, position.lng], { icon: parkedBusIcon })
           .bindPopup(`
-            <div class="p-3 min-w-[200px]">
+            <div class="p-3 min-w-[200px]" onclick="event.stopPropagation()">
               <div class="flex items-center gap-3 mb-3">
                 ${
                   bus.photo_url
@@ -419,21 +462,29 @@ function BusMap({
                   : ""
               }
             </div>
-          `)
+          `, {
+            closeOnClick: false,
+            autoClose: false,
+            closeButton: true,
+            maxWidth: 250,
+            keepInView: true
+          })
           .addTo(map)
 
         // Prevent event propagation
         parkedMarker.on("click", (e) => {
           L.DomEvent.stopPropagation(e)
           if (onBusClick) {
-            handleBusClick(bus)
+            onBusClick(bus)
           }
         })
 
         parkedMarker.on('popupopen', (e) => {
           const popup = e.popup.getElement()
           if (popup) {
-            popup.addEventListener('click', L.DomEvent.stopPropagation)
+            popup.addEventListener('click', (event) => {
+              event.stopPropagation()
+            })
           }
         })
 
@@ -441,8 +492,8 @@ function BusMap({
       })
     }
 
-    // Auto-fit bounds if requested
-    if (autoFit && visibleBusLocations.length > 0 && !activeRouteTripId && !activeTripId) {
+    // Auto-fit bounds only if requested and not during user interaction
+    if (autoFit && visibleBusLocations.length > 0 && !activeRouteTripId && !activeTripId && !isUserInteracting) {
       const activeMarkers = Array.from(markers.values()).filter((_, index) => index < visibleBusLocations.length)
       if (activeMarkers.length > 0) {
         const group = new L.FeatureGroup(activeMarkers)
@@ -459,7 +510,7 @@ function BusMap({
         const bus = buses.find((b) => b.id === busId)
         const trip = tripId ? trips.find((t) => t.id === tripId) : undefined
         if (bus && onBusClick) {
-          handleBusClick(bus, trip)
+          onBusClick(bus, trip)
         }
       }
       (window as unknown as { showParkedBusDetails: (busId: string) => void }).showParkedBusDetails = (
@@ -467,11 +518,18 @@ function BusMap({
       ) => {
         const bus = buses.find((b) => b.id === busId)
         if (bus && onBusClick) {
-          handleBusClick(bus)
+          onBusClick(bus)
+        }
+      }
+      (window as unknown as { toggleRoute: (tripId: string) => void }).toggleRoute = (tripId: string) => {
+        if (activeRouteTripId === tripId) {
+          setActiveRouteTripId(null)
+        } else {
+          setActiveRouteTripId(tripId)
         }
       }
     }
-  }, [busLocations, trips, buses, onBusClick, showControls, autoFit, handleBusClick])
+  }, [busLocations, trips, buses, onBusClick, showControls, autoFit, handleBusClick, activeRouteTripId, activeTripId, isUserInteracting])
 
   return <div ref={mapRef} className="w-full h-full" style={{ minHeight: "400px" }} />
 }

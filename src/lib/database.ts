@@ -1,7 +1,7 @@
 "use client"
 
 import { supabase } from "./supabase"
-import type { Bus, Trip, BusLocation, CreateBusRequest, CreateTripRequest } from "@/types"
+import type { Bus, Trip, BusLocation, CreateBusRequest, CreateTripRequest, RouteTemplate, CreateRouteTemplateRequest } from "@/types"
 
 // Bus operations
 export const getBuses = async (): Promise<Bus[]> => {
@@ -27,6 +27,18 @@ export const createBus = async (busData: CreateBusRequest): Promise<Bus> => {
   return data
 }
 
+export const updateBus = async (busId: string, updates: Partial<Bus>): Promise<Bus> => {
+  const { data, error } = await supabase
+    .from("buses")
+    .update(updates)
+    .eq("id", busId)
+    .select()
+    .single()
+
+  if (error) throw error
+  return data
+}
+
 export const updateBusPhoto = async (busId: string, photoUrl: string): Promise<void> => {
   const { error } = await supabase.from("buses").update({ photo_url: photoUrl }).eq("id", busId)
 
@@ -45,6 +57,48 @@ export const updateBusStatus = async (busId: string, isActive: boolean): Promise
   if (error) throw error
 }
 
+// Route Template operations
+export const getRouteTemplates = async (): Promise<RouteTemplate[]> => {
+  const { data, error } = await supabase.from("route_templates").select("*").order("created_at", { ascending: false })
+
+  if (error) throw error
+  return data || []
+}
+
+export const createRouteTemplate = async (templateData: CreateRouteTemplateRequest): Promise<RouteTemplate> => {
+  const { data, error } = await supabase
+    .from("route_templates")
+    .insert({
+      name: templateData.name,
+      code: templateData.code,
+      description: templateData.description,
+      segments: templateData.segments,
+    })
+    .select()
+    .single()
+
+  if (error) throw error
+  return data
+}
+
+export const updateRouteTemplate = async (templateId: string, updates: Partial<RouteTemplate>): Promise<RouteTemplate> => {
+  const { data, error } = await supabase
+    .from("route_templates")
+    .update(updates)
+    .eq("id", templateId)
+    .select()
+    .single()
+
+  if (error) throw error
+  return data
+}
+
+export const deleteRouteTemplate = async (templateId: string): Promise<void> => {
+  const { error } = await supabase.from("route_templates").delete().eq("id", templateId)
+
+  if (error) throw error
+}
+
 // Trip operations
 export const getTrips = async (): Promise<Trip[]> => {
   const { data, error } = await supabase.from("trips").select("*").order("created_at", { ascending: false })
@@ -58,6 +112,7 @@ export const createTrip = async (tripData: CreateTripRequest): Promise<Trip> => 
     .from("trips")
     .insert({
       bus_id: tripData.bus_id,
+      route_template_id: tripData.route_template_id,
       departure: tripData.departure,
       stops: tripData.stops,
       destination: tripData.destination,

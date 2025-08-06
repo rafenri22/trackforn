@@ -11,25 +11,25 @@ import { useToast } from "@/hooks/use-toast"
 const trackingIntervals = new Map<string, NodeJS.Timeout>()
 const tripStartTimes = new Map<string, number>()
 
-// Realistic speed calculation based on route type and conditions
+// Realistic speed calculation based on route type and conditions - FIXED: 80-100km/h
 const getRealisticSpeed = (distance: number): number => {
   let baseSpeed
   
   // Determine speed based on distance (route type)
   if (distance < 50) {
-    // City routes: 25-40 km/h (traffic, stops)
-    baseSpeed = Math.floor(Math.random() * (40 - 25 + 1)) + 25
+    // City routes: 40-60 km/h (traffic, stops)
+    baseSpeed = Math.floor(Math.random() * (60 - 40 + 1)) + 40
   } else if (distance < 150) {
-    // Inter-city routes: 45-65 km/h (mixed roads)
-    baseSpeed = Math.floor(Math.random() * (65 - 45 + 1)) + 45
-  } else {
-    // Long distance routes: 60-80 km/h (highways with stops)
+    // Inter-city routes: 60-80 km/h (mixed roads)
     baseSpeed = Math.floor(Math.random() * (80 - 60 + 1)) + 60
+  } else {
+    // Long distance routes: 80-100 km/h (highways with stops) - FIXED
+    baseSpeed = Math.floor(Math.random() * (100 - 80 + 1)) + 80
   }
   
-  // Add random variation for traffic conditions (-10 to +5 km/h)
-  const variation = Math.floor(Math.random() * 16) - 10
-  return Math.max(20, Math.min(85, baseSpeed + variation)) // Keep within reasonable bounds
+  // Add random variation for traffic conditions (-5 to +5 km/h)
+  const variation = Math.floor(Math.random() * 11) - 5
+  return Math.max(30, Math.min(100, baseSpeed + variation)) // Keep within 30-100 km/h bounds
 }
 
 // Calculate distance between two coordinates
@@ -88,14 +88,14 @@ export function GlobalTracker() {
         )
       }
 
-      // Get realistic speed based on distance and route type
+      // Get realistic speed based on distance and route type - FIXED: 80-100km/h
       const realisticSpeed = getRealisticSpeed(totalDistance)
       
       // Calculate realistic completion time in minutes
       const estimatedTripTimeMinutes = (totalDistance / realisticSpeed) * 60
       
-      // Calculate progress per update (every 15 seconds for smoother movement)
-      const updateIntervalSeconds = 15
+      // Calculate progress per update (every 20 seconds for smoother movement)
+      const updateIntervalSeconds = 20
       const totalUpdates = Math.ceil(estimatedTripTimeMinutes * 60 / updateIntervalSeconds)
       const progressPerUpdate = 100 / totalUpdates
 
@@ -120,9 +120,9 @@ export function GlobalTracker() {
           const elapsedTimeMs = Date.now() - startTime
           const elapsedTimeMinutes = elapsedTimeMs / (1000 * 60)
 
-          // Vary speed slightly for realism (+/- 5 km/h)
-          const speedVariation = (Math.random() - 0.5) * 10
-          currentSpeed = Math.max(15, Math.min(90, realisticSpeed + speedVariation))
+          // Vary speed slightly for realism (+/- 3 km/h)
+          const speedVariation = (Math.random() - 0.5) * 6
+          currentSpeed = Math.max(30, Math.min(100, realisticSpeed + speedVariation))
 
           // Calculate new progress based on realistic timing
           const newProgress = Math.min(100, currentTrip.progress + progressPerUpdate)
@@ -186,7 +186,7 @@ export function GlobalTracker() {
         } catch (trackingError) {
           console.error("❌ Error in global tracking:", trackingError)
         }
-      }, updateIntervalSeconds * 1000) // Update every 15 seconds for smooth movement
+      }, updateIntervalSeconds * 1000) // Update every 20 seconds for smooth movement
 
       trackingIntervals.set(trip.id, interval)
       console.log(`✅ Global tracking started for: ${tripName} at realistic speed`)
@@ -352,7 +352,7 @@ export const startTripTracking = (trip: Trip) => {
 
   const realisticSpeed = getRealisticSpeed(totalDistance)
   const estimatedTripTimeMinutes = (totalDistance / realisticSpeed) * 60
-  const updateIntervalSeconds = 15
+  const updateIntervalSeconds = 20
   const totalUpdates = Math.ceil(estimatedTripTimeMinutes * 60 / updateIntervalSeconds)
   const progressPerUpdate = 100 / totalUpdates
 

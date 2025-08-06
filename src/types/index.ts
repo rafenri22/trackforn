@@ -19,9 +19,37 @@ export interface Stop extends Location {
   duration: number // in minutes
 }
 
+export interface TollGate {
+  name: string
+  lat: number
+  lng: number
+}
+
+export interface RouteSegment {
+  type: 'direct' | 'toll' | 'stop'
+  from: Location
+  to: Location
+  toll_entry?: TollGate
+  toll_exit?: TollGate
+  stop_duration?: number // in minutes for stops
+}
+
+export interface RouteTemplate {
+  id: string
+  name: string
+  code: string
+  description?: string
+  segments: RouteSegment[]
+  total_distance?: number
+  estimated_duration?: number
+  created_at: string
+  updated_at: string
+}
+
 export interface Trip {
   id: string
   bus_id: string
+  route_template_id?: string // Optional: if using route template
   departure: Location
   stops: Stop[]
   destination: Location
@@ -62,6 +90,7 @@ export interface CreateBusRequest {
 
 export interface CreateTripRequest {
   bus_id: string
+  route_template_id?: string
   departure: Location
   stops: Stop[]
   destination: Location
@@ -69,4 +98,11 @@ export interface CreateTripRequest {
 
 export interface BusWithTrip extends Bus {
   current_trip?: Trip
+}
+
+export interface CreateRouteTemplateRequest {
+  name: string
+  code: string
+  description?: string
+  segments: RouteSegment[]
 }
